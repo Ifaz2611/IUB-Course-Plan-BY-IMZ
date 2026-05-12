@@ -1,4 +1,4 @@
-# IUB Course Planner
+<!-- # IUB Course Planner
 
 Assalamualaikum! 👋
 
@@ -73,11 +73,11 @@ A simple web app built to make course planning faster, cleaner, and much less st
 
 If you found this helpful, please share it with your friends!  
 Found a bug, or have an idea?  
-- [Open an issue](https://github.com/mikealvarez9999/IUB-Course-Planner/issues)
+- [Open an issue](https://github.com/USER/IUB-Course-Planner/issues)
 - Comment or DM me on socials
 
 If this makes life a little easier for even a few of you, it’s worth it. 💙
 
 ---
 
-**Thank you for checking this out!**
+**Thank you for checking this out!** -->

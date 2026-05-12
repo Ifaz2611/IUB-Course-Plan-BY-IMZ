@@ -393,3 +393,12 @@ html[data-theme="light"] #toast { color:#0f172a; background:#f8fafc; border-colo
 
 /* Desktop-only helper */
 #btnToggleFilters { display: none; }
+
+/* ///////////////// //////////////////////////////////////////////// 
+
+  Future styles (not yet implemented) - keep at bottom for easy removal when we do implement
+  - These are just placeholders to show the general idea of how new UI elements could look, and to avoid merge conflicts with the current styles.
+  - They may be removed or significantly changed when we add the actual features.
+*/
+
+
