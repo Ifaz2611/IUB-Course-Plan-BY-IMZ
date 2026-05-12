@@ -1,0 +1,1378 @@
+﻿export function initPlannerRuntime(html2canvas) {
+    const IRAS_AUTH_LOGIN_URL = 'https://iras-auth.pages.dev/login';
+    const IRAS_OFFERS_URL = 'https://irastools.pages.dev/api/student/all-offer-courses';
+  const IRAS_PREREQ_PROXY_URL = '/api/prerequisites';
+  const IRAS_REGISTERED_COURSES_PROXY_URL = '/api/registered-courses';
+
+  if (typeof window === 'undefined') return () => {};
+  if (window.__IUB_PLANNER_BOOTED) return () => {};
+  window.__IUB_PLANNER_BOOTED = true;
+
+  // ---------- Config ----------
+  const DAY_KEYS = ['A','S','M','T','W','R']; // No Friday
+  const DAY_NAME_MAP = { A:'Sat', S:'Sun', M:'Mon', T:'Tue', W:'Wed', R:'Thu' };
+  const DAY_MAP = Object.fromEntries(DAY_KEYS.map((k,i)=>[k,i]));
+  const STORAGE_THEME = 'iub-theme';
+  const PLANS_STORAGE_PREFIX = 'iub-plans';
+
+  // IRAS auth + endpoints
+  const IRAS_AUTH_KEY = 'iras-auth-v1';
+  const IRAS_OFFERS_CACHE_PREFIX = 'iras-offers-';
+  const IRAS_API_URL = IRAS_OFFERS_URL;
+
+  // Per-user course backup keys (kept for offers only)
+  function getIrasBackupKey(studentId) { return `iub-courses-backup-${studentId}`; }
+  function getIrasBackupTimeKey(studentId) { return `iub-courses-backup-time-${studentId}`; }
+  function getPlansStorageKey() {
+    const studentId = getIRASAuth()?.studentId;
+    return studentId ? `${PLANS_STORAGE_PREFIX}-${studentId}` : `${PLANS_STORAGE_PREFIX}-guest`;
+  }
+
+  // IUB discrete time slots
+  const SLOTS = [
+    { start: 8*60,        end: 9*60+30,  label: '8:00-09:30' },
+    { start: 9*60+40,     end: 11*60+10, label: '9:40-11:10' },
+    { start: 11*60+20,    end: 12*60+50, label: '11:20-12:50' },
+    { start: 13*60,       end: 14*60+30, label: '1:00-2:30' },
+    { start: 14*60+40,    end: 16*60+10, label: '2:40-4:10' },
+    { start: 16*60+20,    end: 17*60+50, label: '4:20-5:50' },
+    { start: 18*60+30,    end: 21*60+30, label: '6:30-9:30' },
+  ];
+  const SLOT_HEIGHT = 100;
+  const HEADER_OFFSET = 24;
+  const DAY_GROUPS = { ST: ['S','T'], MW: ['M','W'], AR: ['A','R'] };
+
+  // ---------- State ----------
+  let staticSections = [];  // per-user backup (courses)
+  let irasSections = [];    // from IRAS API (courses)
+  let plans = [];           // [{id,name,items:[sectionKey]}]
+  let activePlanId = null;
+  const sectionByKey = new Map();
+  let activeMobileDay = 'S';
+  const mql = window.matchMedia('(max-width: 768px)');
+  let isMobile = mql.matches;
+  let authPopup = null;
+  let isLoadingCourses = false;
+  let savePlansTimer = null;
+  let prereqLoadedForStudentId = null;
+  let gradeHistoryLoadedForStudentId = null;
+  let prereqByCourse = new Map();
+  let completedWithA = new Set();
+
+  // ---------- Utilities ----------
+  const $ = sel => document.querySelector(sel);
+  function setLoading(loading) {
+    isLoadingCourses = !!loading;
+    const sp = $('#loadingSpinner');
+    const headerBtn = $('#btnIRASLoginHeader');
+    const deskBtn = $('#btnIRASLoginDesk');
+    if (sp) sp.style.display = loading ? 'inline-flex' : 'none';
+    if (headerBtn) headerBtn.disabled = loading;
+    if (deskBtn) deskBtn.disabled = loading;
+  }
+  function minutesFromHHMM(s) {
+    if (!s) return null;
+    let t = String(s).trim();
+    t = t.replace(/[^0-9]/g, '');
+    if (t.length === 3) t = '0' + t;
+    const m = t.match(/^(\d{2})(\d{2})$/);
+    if (!m) return null;
+    return parseInt(m[1],10)*60 + parseInt(m[2],10);
+  }
+  function parseDaysTime(str) {
+    const src = (str || '').toString().trim();
+    const m = src.match(/^([A-Z]+)\s*:?\s*(\d{3,4})\s*-\s*(\d{3,4})$/i);
+    if (!m) return null;
+    const rawDays = (m[1] || '').trim().toUpperCase();
+    const dayCodes = rawDays.split('').filter(d => DAY_KEYS.includes(d));
+    const start = minutesFromHHMM(m[2]);
+    const end = minutesFromHHMM(m[3]);
+    if (!dayCodes.length || start == null || end == null) return null;
+    return { days: dayCodes, start, end, label: `${rawDays}: ${String(m[2]).padStart(4,'0')}-${String(m[3]).padStart(4,'0')}` };
+  }
+  function keyOf(sec) {
+    // Stable key: course|section|DAYS:start-end â€” ignores faculty, uses numeric times
+    // Example: CSE101|1|ST:580-670
+    const days = (sec.timing?.days || []).join('');
+    const start = sec.timing?.start ?? 0;
+    const end = sec.timing?.end ?? 0;
+    return `${sec.course}|${sec.section}|${days}:${start}-${end}`;
+  }
+  function legacyKeyOf(sec) {
+    // Your previous key (kept for compatibility)
+    return `${sec.course}|${sec.section}|${sec.timing?.label || ''}|${(sec.faculty || '').trim()}`;
+  }
+  function updateThemeMeta(theme) {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', theme === 'light' ? '#ffffff' : '#121821');
+  }
+  function applyThemeOnLoad() {
+    const saved = localStorage.getItem(STORAGE_THEME);
+    const theme = saved === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    updateThemeMeta(theme);
+    syncThemeButton(theme);
+  }
+  function setTheme(isLight) {
+    const theme = isLight ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(STORAGE_THEME, theme);
+    updateThemeMeta(theme);
+    syncThemeButton(theme);
+  }
+  function syncThemeButton(theme) {
+    const btn = $('#themeToggleBtn');
+    if (!btn) return;
+    const isLight = theme === 'light';
+    btn.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+  }
+  function reindexAll() {
+    sectionByKey.clear();
+    const add = (sec) => {
+      if (!sec) return;
+      sectionByKey.set(keyOf(sec), sec);       // new stable key
+      sectionByKey.set(legacyKeyOf(sec), sec); // legacy key still resolves
+    };
+    for (const sec of staticSections) add(sec);
+    for (const sec of irasSections) add(sec);
+  }
+  function overlaps(a, b) { return a.start < b.end && b.start < a.end; }
+  function findConflictingWith(items, candidate) {
+    for (const s of items) {
+      const daySet = new Set(s.timing.days);
+      if (!candidate.timing.days.some(d => daySet.has(d))) continue;
+      if (overlaps({start:s.timing.start, end:s.timing.end}, {start:candidate.timing.start, end:candidate.timing.end})) return s;
+    }
+    return null;
+  }
+  function showToast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(showToast._timer); showToast._timer = setTimeout(()=>t.classList.remove('show'), 2800);
+  }
+  function slotIndexFor(start, end) {
+    for (let i=0;i<SLOTS.length;i++) if (SLOTS[i].start===start) return i;
+    return -1;
+  }
+  function inDayGroup(sec, groupKey) {
+    const group = DAY_GROUPS[groupKey]; if (!group) return true;
+    return sec.timing.days.some(d => group.includes(d));
+  }
+
+  function toCourseCode(v) {
+    return String(v || '').trim().toUpperCase();
+  }
+
+  function normalizeGrade(v) {
+    return String(v || '').trim().toUpperCase();
+  }
+
+  function clearVerificationState() {
+    prereqLoadedForStudentId = null;
+    gradeHistoryLoadedForStudentId = null;
+    prereqByCourse = new Map();
+    completedWithA = new Set();
+  }
+
+  function hasPassedPrereq(row) {
+    const grade = String(row?.grade || '').trim().toUpperCase();
+    if (grade) return grade !== 'F' && grade !== 'Z';
+    const gp = Number(row?.gradePoint);
+    return Number.isFinite(gp) ? gp > 0 : false;
+  }
+
+  function buildPrereqIndex(rows) {
+    const grouped = new Map();
+    for (const row of (rows || [])) {
+      const courseId = toCourseCode(row?.courseId);
+      if (!courseId) continue;
+      if (!grouped.has(courseId)) grouped.set(courseId, []);
+      grouped.get(courseId).push(row);
+    }
+
+    const index = new Map();
+
+    grouped.forEach((entries, courseId) => {
+      const failed = entries.filter((r) => !hasPassedPrereq(r));
+      if (failed.length === 0) {
+        index.set(courseId, { eligible: true, reason: '' });
+        return;
+      }
+      const missing = failed
+        .map((r) => toCourseCode(r?.preReqCourseId))
+        .filter(Boolean)
+        .join(', ');
+      index.set(courseId, {
+        eligible: false,
+        reason: missing
+          ? `Missing/failed prerequisites: ${missing}`
+          : 'Prerequisite requirements are not satisfied.'
+      });
+    });
+
+    prereqByCourse = index;
+  }
+
+  function buildCompletedCourseIndex(rows) {
+    const withA = new Set();
+
+    for (const row of (rows || [])) {
+      const courseId = toCourseCode(row?.courseId);
+      if (!courseId) continue;
+      if (normalizeGrade(row?.grade) === 'A') {
+        withA.add(courseId);
+      }
+    }
+
+    completedWithA = withA;
+  }
+
+  function getCourseStatus(courseId) {
+    const code = toCourseCode(courseId);
+    const eligibility = prereqByCourse.get(code) || { eligible: true, reason: '' };
+    const hasA = completedWithA.has(code);
+
+    if (hasA) {
+      return {
+        eligible: false,
+        reason: 'You already earned grade A in this course. Retake is not allowed.',
+        hasA: true,
+        toneClass: 'course-completed-a'
+      };
+    }
+
+    return {
+      eligible: eligibility.eligible,
+      reason: eligibility.reason,
+      hasA: false,
+      toneClass: eligibility.eligible ? 'course-eligible' : 'course-ineligible'
+    };
+  }
+
+  async function loadVerificationFromIRAS(force = false) {
+    const auth = getIRASAuth();
+    if (!auth?.studentId || !auth?.token) {
+      clearVerificationState();
+      return;
+    }
+
+    if (
+      !force &&
+      prereqLoadedForStudentId === auth.studentId &&
+      gradeHistoryLoadedForStudentId === auth.studentId
+    ) {
+      return;
+    }
+
+    const [prereqResult, gradeHistoryResult] = await Promise.allSettled([
+      fetch(IRAS_PREREQ_PROXY_URL, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          studentId: auth.studentId,
+          token: auth.token
+        })
+      }),
+      fetch(IRAS_REGISTERED_COURSES_PROXY_URL, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          studentId: auth.studentId,
+          token: auth.token
+        })
+      })
+    ]);
+
+    const errors = [];
+
+    if (prereqResult.status === 'fulfilled') {
+      const response = prereqResult.value;
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || String(payload?.message || '').toLowerCase() === 'invalid request') {
+        errors.push(new Error(payload?.message || ('Prerequisite API HTTP ' + response.status)));
+      } else {
+        buildPrereqIndex(Array.isArray(payload?.data) ? payload.data : []);
+        prereqLoadedForStudentId = auth.studentId;
+      }
+    } else {
+      errors.push(prereqResult.reason);
+    }
+
+    if (gradeHistoryResult.status === 'fulfilled') {
+      const response = gradeHistoryResult.value;
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || String(payload?.message || '').toLowerCase() === 'invalid request') {
+        errors.push(new Error(payload?.message || ('Registered-courses API HTTP ' + response.status)));
+      } else {
+        buildCompletedCourseIndex(Array.isArray(payload?.data) ? payload.data : []);
+        gradeHistoryLoadedForStudentId = auth.studentId;
+      }
+    } else {
+      errors.push(gradeHistoryResult.reason);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(errors.map((err) => err?.message || String(err)).join('; '));
+    }
+  }
+
+  // ---------- IRAS Auth ----------
+  function buildRedirectURI() {
+    return window.location.origin + window.location.pathname;
+  }
+  function getIRASAuth() {
+    try { return JSON.parse(localStorage.getItem(IRAS_AUTH_KEY) || 'null'); } catch { return null; }
+  }
+  function setIRASAuth(auth) {
+    localStorage.setItem(IRAS_AUTH_KEY, JSON.stringify(auth));
+  }
+  function clearIRASAuth() {
+    localStorage.removeItem(IRAS_AUTH_KEY);
+  }
+  function captureIRASAuthFromURL() {
+    const url = new URL(window.location.href);
+    const qp = url.searchParams;
+    const token = qp.get('token');
+    const studentId = qp.get('studentId');
+    if (token && studentId) {
+      const auth = {
+        token,
+        studentId,
+        studentName: qp.get('studentName') || '',
+        departmentName: qp.get('departmentName') || '',
+        degreeName: qp.get('degreeName') || '',
+        email: qp.get('email') || '',
+        ts: Date.now()
+      };
+      if (window.opener && typeof window.opener.postMessage === 'function') {
+        window.opener.postMessage({ type: 'IRAS_AUTH', payload: auth }, window.location.origin);
+        window.close();
+        return true;
+      }
+      setIRASAuth(auth);
+      ['token','studentId','studentName','departmentName','degreeName','email'].forEach(k => qp.delete(k));
+      history.replaceState({}, document.title, url.pathname + (qp.toString() ? '?' + qp.toString() : '') + url.hash);
+      return true;
+    }
+    return false;
+  }
+  function openIRASPopup() {
+    const redirect = buildRedirectURI();
+    const url = `${IRAS_AUTH_LOGIN_URL}?redirect_uri=${encodeURIComponent(redirect)}`;
+    const w = 520, h = 640;
+    const y = window.top.outerHeight / 2 + window.top.screenY - (h / 2);
+    const x = window.top.outerWidth / 2 + window.top.screenX - (w / 2);
+    authPopup = window.open(url, 'iras_login', `width=${w},height=${h},left=${x},top=${y},resizable=yes,scrollbars=yes`);
+    if (!authPopup) window.location.href = url;
+  }
+
+  // ---------- Plans: local browser storage ----------
+  function ensureDefaultPlans() {
+    if (!Array.isArray(plans) || plans.length === 0) {
+      const id = 'p_' + Math.random().toString(36).slice(2);
+      plans = [{ id, name: 'Plan A', items: [] }];
+      activePlanId = id;
+    } else if (!activePlanId) {
+      activePlanId = plans[0].id;
+    }
+  }
+
+  async function loadPlansFromServer() {
+    try {
+      const raw = localStorage.getItem(getPlansStorageKey());
+      const data = raw ? JSON.parse(raw) : null;
+      if (data && Array.isArray(data.plans) && data.plans.length > 0) {
+        plans = data.plans;
+        activePlanId = data.activePlanId || data.plans[0]?.id || null;
+      } else {
+        // No saved plans yet: initialize default in-memory; will save on first change.
+        ensureDefaultPlans();
+      }
+    } catch (e) {
+      console.warn('Plans load failed:', e);
+      ensureDefaultPlans();
+    }
+  }
+
+  async function savePlansToServer() {
+    try {
+      const payload = JSON.stringify({ plans, activePlanId, ts: Date.now() });
+      localStorage.setItem(getPlansStorageKey(), payload);
+    } catch (e) {
+      console.warn('Plans save failed:', e);
+      showToast('Could not save your plans right now.');
+    }
+  }
+
+  function saveAll() {
+    // Debounced local save
+    clearTimeout(savePlansTimer);
+    savePlansTimer = setTimeout(() => { savePlansToServer(); }, 500);
+  }
+
+  function resetPlansToDefault() {
+    const id = 'p_' + Math.random().toString(36).slice(2);
+    plans = [{ id, name: 'Plan A', items: [] }];
+    activePlanId = id;
+  }
+
+  // ---------- Courses (IRAS) ----------
+  // UPDATED: make logout visually clear immediately (and wipe in-memory plans)
+  function logoutIRAS() {
+    // Optional: flush any pending plan save (non-blocking)
+    try { savePlansToServer(); } catch {}
+    clearIRASAuth();
+
+    // Clear IRAS in-memory data and reindex (so the list reflects logged-out state)
+    irasSections = [];
+    staticSections = [];           // <-- ADD THIS
+    reindexAll();
+    prereqLoadedForStudentId = null;
+    prereqByCourse = new Map();
+
+    // Hide the chip right away and clear its text
+    const info = document.getElementById('authInfo');
+    const chip = document.getElementById('authChip');
+    if (chip) chip.textContent = '';
+    if (info) info.style.display = 'none';
+
+    // Reset login buttons to "IRAS Login" immediately
+    wireAuthButtons();
+
+    // Clear the "Last refreshed" text
+    const infoBox = document.getElementById('courseRefreshInfo');
+    if (infoBox) infoBox.textContent = '';
+
+    // Reset plans to a clean default so another user's plans aren't visible
+    resetPlansToDefault();
+
+    renderAll();
+    showToast('Logged out.');
+  }
+
+  // Wire login/refresh buttons depending on auth and screen size
+  function wireAuthButtons() {
+    const auth = getIRASAuth();
+    const headLogin = $('#btnIRASLoginHeader');
+    const deskLogin = $('#btnIRASLoginDesk');
+
+    if (!headLogin || !deskLogin) return;
+
+    const isDesk = window.matchMedia('(min-width: 769px)').matches;
+
+    if (auth?.studentId) {
+      headLogin.textContent = 'Course Refresh';
+      headLogin.title = 'Refresh your IRAS courses';
+      headLogin.onclick = () => { refreshCourses(); };
+      deskLogin.textContent = 'Course Refresh';
+      deskLogin.title = 'Refresh your IRAS courses';
+      deskLogin.onclick = () => { refreshCourses(); };
+
+      headLogin.style.display = isDesk ? 'none' : '';
+      deskLogin.style.display = isDesk ? '' : 'none';
+    } else {
+      headLogin.textContent = 'IRAS Login';
+      headLogin.title = 'Sign in with IRAS';
+      headLogin.onclick = () => { openIRASPopup(); };
+      deskLogin.textContent = 'IRAS Login';
+      deskLogin.title = 'Sign in with IRAS';
+      deskLogin.onclick = () => { openIRASPopup(); };
+
+      headLogin.style.display = isDesk ? 'none' : '';
+      deskLogin.style.display = isDesk ? '' : 'none';
+    }
+  }
+
+  function updateAuthUI() {
+    const auth = getIRASAuth();
+    const info = $('#authInfo');
+    const chip = $('#authChip');
+
+    if (auth?.studentId) {
+      info.style.display = 'flex';
+      chip.textContent = `${auth.studentName || 'Student'} (${auth.studentId})`;
+    } else {
+      info.style.display = 'none';
+      if (chip) chip.textContent = '';
+    }
+    wireAuthButtons();
+  }
+
+  // Receive auth from popup
+  window.addEventListener('message', async (event) => {
+    if (event.origin !== window.location.origin) return;
+    if (event.data && event.data.type === 'IRAS_AUTH') {
+      try {
+        const auth = event.data.payload;
+        setIRASAuth(auth);
+        updateAuthUI();         // wires buttons (so IRAS Login becomes Course Refresh)
+        await loadVerificationFromIRAS(true).catch((e) => {
+          console.warn('Verification load failed:', e);
+          showToast('Could not validate prerequisite/grade status right now.');
+        });
+        // Load plans first, then courses, then render
+        await loadPlansFromServer().catch(()=>{});
+        await loadSectionsFromIRAS().catch(()=>{});
+        renderAll();
+      } finally {
+        try { if (authPopup && !authPopup.closed) authPopup.close(); } catch {}
+      }
+    }
+  });
+  // add once, near other event listeners
+  window.addEventListener('beforeunload', () => {
+    try { savePlansToServer(); } catch {}
+  });
+
+  // ---------- Backend load (per-user backup only) ----------
+  function loadBackupForCurrentUser() {
+    const auth = getIRASAuth();
+    staticSections = [];
+    if (auth?.studentId) {
+      const backup = localStorage.getItem(getIrasBackupKey(auth.studentId));
+      if (backup) {
+        try { staticSections = JSON.parse(backup) || []; } catch {}
+      }
+    }
+    reindexAll();
+  }
+
+  async function loadSectionsFromBackend() {
+    loadBackupForCurrentUser();
+    const tbody = $('#courseTbody');
+    if (!staticSections.length && tbody) {
+      tbody.innerHTML = '<tr><td colspan="7" class="small">No courses available.</td></tr>';
+    }
+  }
+
+  // ---------- IRAS offers load ----------
+  async function refreshCourses() {
+    await loadVerificationFromIRAS(true).catch((e) => {
+      console.warn('Verification load failed:', e);
+      showToast('Could not refresh prerequisite/grade status right now.');
+    });
+    await loadSectionsFromIRAS().then(() => renderAll());
+  }
+
+  function setBackupBadge(show, text) {
+    const badge = $('#backupBadge');
+    if (!badge) return;
+    badge.style.display = show ? 'inline-flex' : 'none';
+    if (text) badge.textContent = text;
+  }
+
+  async function loadSectionsFromIRAS() {
+    const auth = getIRASAuth();
+    const errBox = document.getElementById('courseError');
+  
+    setBackupBadge(false);
+    if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
+  
+    // Not authenticated â†’ clear in-memory IRAS data and reindex
+    if (!auth?.studentId || !auth?.token) {
+      irasSections = [];
+      reindexAll();
+      clearVerificationState();
+      if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(IRAS_OFFERS_URL, {
+        method: 'POST',
+        //mode: 'cors',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: auth.studentId, token: auth.token }),
+      });
+  
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const raw = await response.json();
+  
+      // Back-compat:
+      // - Old bridge: { success:true, data:{ eligibleOfferCourses:[...] } } (no "source")
+      // - New bridge: { ok:true, source:'iras'|'backup'|'none', data:{ eligibleOfferCourses:[...] } }
+      const offersRaw = (raw && raw.data && Array.isArray(raw.data.eligibleOfferCourses))
+        ? raw.data.eligibleOfferCourses
+        : [];
+      let source = raw && raw.source ? raw.source : '';
+  
+      if (!source) {
+        if (offersRaw.length > 0) source = 'iras';
+        else if (raw?.success === true || raw?.ok === true) source = 'none';
+      }
+  
+      if (source === 'iras' && offersRaw.length > 0) {
+        // Fresh IRAS: map and persist local backup
+        irasSections = offersRaw.map(mapIRASRow).filter(Boolean);
+        localStorage.setItem(getIrasBackupKey(auth.studentId), JSON.stringify(irasSections));
+        localStorage.setItem(getIrasBackupTimeKey(auth.studentId), new Date().toISOString());
+        localStorage.setItem(IRAS_OFFERS_CACHE_PREFIX + auth.studentId, JSON.stringify(offersRaw));
+  
+        // Prefer IRAS list visibly; keep static mirror for unified indexing
+        staticSections = [...irasSections];
+        reindexAll();
+        if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+        setBackupBadge(false);
+        return;
+      }
+  
+      if (source === 'backup' && offersRaw.length > 0) {
+        // Server backup still gets mapped and mirrored locally for offline
+        irasSections = offersRaw.map(mapIRASRow).filter(Boolean);
+        localStorage.setItem(getIrasBackupKey(auth.studentId), JSON.stringify(irasSections));
+        localStorage.setItem(getIrasBackupTimeKey(auth.studentId), new Date().toISOString());
+        localStorage.setItem(IRAS_OFFERS_CACHE_PREFIX + auth.studentId, JSON.stringify(offersRaw));
+  
+        staticSections = [...irasSections];
+        reindexAll();
+        if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+        setBackupBadge(true, 'Showing last saved backup');
+        return;
+      }
+  
+      // No data from bridge â†’ try per-user local backup
+      const ls = localStorage.getItem(getIrasBackupKey(auth.studentId));
+      if (ls) {
+        try {
+          const parsed = JSON.parse(ls) || [];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            irasSections = parsed;
+            staticSections = [...irasSections];
+            reindexAll();
+            if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+            setBackupBadge(true, 'Showing last saved backup');
+            return;
+          }
+        } catch {}
+      }
+  
+      // Nothing anywhere â€” show friendly message
+      irasSections = [];
+      reindexAll();
+      if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+      if (errBox) {
+        errBox.textContent = (raw && raw.message)
+          ? raw.message
+          : 'No IRAS offers available and no backup found yet for this student.';
+        errBox.style.display = 'block';
+      }
+      setBackupBadge(false);
+    } catch (e) {
+      console.warn('IRAS offers fetch failed:', e);
+  
+      // Network/other error â†’ fallback to per-user local backup if available
+      const studentId = getIRASAuth()?.studentId || '';
+      const backup = studentId && localStorage.getItem(getIrasBackupKey(studentId));
+      if (backup) {
+        try {
+          irasSections = JSON.parse(backup) || [];
+          staticSections = [...irasSections];
+          reindexAll();
+          if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+          setBackupBadge(true, 'Showing last saved backup');
+        } catch {
+          irasSections = [];
+          reindexAll();
+          if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+          if (errBox) { errBox.textContent = 'Could not load courses.'; errBox.style.display = 'block'; }
+          setBackupBadge(false);
+        }
+      } else {
+        irasSections = [];
+        reindexAll();
+        if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+        if (errBox) { errBox.textContent = 'Could not load courses.'; errBox.style.display = 'block'; }
+        setBackupBadge(false);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Map IRAS row -> internal section object
+  function mapIRASRow(c) {
+    if (!c) return null;
+    const course = c.courseId || 'UNKNOWN';
+    const section = parseInt(c.section || 0, 10) || 0;
+    const title = c.courseName || '';
+    const faculty = c.facualtyName || c.facultyName || c.faculty || '';
+    const timing = parseDaysTime(c.timeSlot || '');
+    const capacity = parseInt(c.capacity || 0, 10) || 0;
+    let enrolled = Number.isFinite(parseInt(c.enrolled, 10)) ? parseInt(c.enrolled, 10) : (capacity - (parseInt(c.vacancy || 0, 10) || 0));
+    if (!Number.isFinite(enrolled)) enrolled = 0;
+    const credits = parseInt(c.creditHour || 0, 10) || 0;
+    return timing ? { course, section, title, faculty, timing, enrolled, capacity, credits, cat: 'IRAS' } : null;
+  }
+
+  // ---------- Rendering ----------
+  function getActiveList() {
+    if (irasSections.length > 0) return irasSections;
+    if (staticSections.length > 0) return staticSections;
+    return [];
+  }
+
+  function renderPlans() {
+    const cont = $('#plans'); cont.innerHTML = '';
+    ensureDefaultPlans();
+    for (const p of plans) {
+      const btn = document.createElement('button');
+      btn.className = 'plan' + (p.id === activePlanId ? ' active' : '');
+      btn.textContent = p.name;
+      btn.onclick = () => { activePlanId = p.id; saveAll(); renderAll(); };
+      cont.appendChild(btn);
+    }
+    const plan = plans.find(p => p.id === activePlanId);
+    $('#planTitle').textContent = plan ? plan.name : '-';
+  }
+
+  function filteredSections() {
+    const base = getActiveList();
+    const q = ($('#search').value || '').toLowerCase();
+    const groupFilter = $('#filterDay').value || '';
+    const statusFilter = $('#filterStatus')?.value || '';
+    const availFilter = $('#filterAvail').value || '';
+    return base.filter(sec => {
+      const hay = `${sec.course} ${sec.title} ${sec.faculty}`.toLowerCase();
+      if (q && !hay.includes(q)) return false;
+      if (groupFilter && !inDayGroup(sec, groupFilter)) return false;
+      if (statusFilter) {
+        const courseStatus = getCourseStatus(sec.course);
+        if (statusFilter === 'eligible' && !courseStatus.eligible) return false;
+        if (statusFilter === 'blocked' && courseStatus.toneClass !== 'course-ineligible') return false;
+        if (statusFilter === 'gradeA' && courseStatus.toneClass !== 'course-completed-a') return false;
+      }
+      if (availFilter) {
+        const full = sec.enrolled >= sec.capacity;
+        if (availFilter === 'open' && full) return false;
+        if (availFilter === 'full' && !full) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderCourseTableOrCards() {
+    const list = filteredSections();
+    const tbody = $('#courseTbody');
+    const cards = $('#courseCards');
+    const infoBox = $('#courseRefreshInfo');
+
+    infoBox.textContent = '';
+    const auth = getIRASAuth();
+    if (auth?.studentId) {
+      const time = localStorage.getItem(getIrasBackupTimeKey(auth.studentId));
+      if (time) {
+        const dt = new Date(time);
+        infoBox.textContent = 'Last refreshed: ' + dt.toLocaleString();
+      }
+    }
+
+    if (list.length === 0) {
+      $('#tableWrap').style.display = isMobile ? 'none' : '';
+      cards.style.display = isMobile ? 'grid' : 'none';
+      if (!isMobile) {
+        tbody.innerHTML = '<tr><td colspan="7" class="small">No courses to show yet. Sign in via IRAS or wait for data to load.</td></tr>';
+      } else {
+        cards.innerHTML = '<div class="small" style="padding:8px;">No courses to show yet.</div>';
+      }
+      return;
+    }
+
+    if (!isMobile) {
+      $('#tableWrap').style.display = '';
+      cards.style.display = 'none';
+      tbody.innerHTML = '';
+      const active = plans.find(p => p.id === activePlanId);
+
+      for (const sec of list) {
+        const tr = document.createElement('tr');
+        const full = sec.enrolled >= sec.capacity;
+        const courseStatus = getCourseStatus(sec.course);
+        const canAdd = courseStatus.eligible;
+
+        tr.innerHTML = `
+          <td class="nowrap"><strong class="${courseStatus.toneClass}">${sec.course}</strong></td>
+          <td>${sec.section}</td>
+          <td><span class="tag">${sec.timing.label}</span></td>
+          <td class="wrap ${courseStatus.toneClass}">${sec.faculty || ''}</td>
+          <td class="wrap ${courseStatus.toneClass}">${sec.title || ''}</td>
+          <td class="right"><span class="avail ${full ? 'full' : 'ok'}">${sec.enrolled}/${sec.capacity}</span></td>
+          <td class="actions"></td>
+        `;
+
+        const actions = tr.querySelector('.actions');
+        const btnAdd = document.createElement('button');
+        btnAdd.className = 'btn';
+        btnAdd.textContent = 'Add To Plan';
+        if (!canAdd && courseStatus.reason) btnAdd.title = courseStatus.reason;
+        btnAdd.onclick = () => tryAddToPlan(sec, active);
+        actions.appendChild(btnAdd);
+
+        tbody.appendChild(tr);
+      }
+    } else {
+      $('#tableWrap').style.display = 'none';
+      cards.style.display = 'grid';
+      cards.innerHTML = '';
+      const active = plans.find(p => p.id === activePlanId);
+
+      for (const sec of list) {
+        const full = sec.enrolled >= sec.capacity;
+        const courseStatus = getCourseStatus(sec.course);
+        const canAdd = courseStatus.eligible;
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="card-top">
+            <div class="card-title ${courseStatus.toneClass}"><span>${sec.course}</span><span class="card-sec-inline">Sec ${sec.section}</span></div>
+            <div class="tag">${sec.timing.label}</div>
+          </div>
+          <div class="card-sub ${courseStatus.toneClass}">${sec.title || ''}</div>
+          <div class="card-meta">
+            <span class="small"><strong>Faculty:</strong> <span class="fac"></span></span>
+            <span class="small"><strong>Enrolled:</strong> <span class="${full ? 'avail full' : 'avail ok'}">${sec.enrolled}/${sec.capacity}</span></span>
+          </div>
+          <div class="card-actions">
+            <button class="btn">Add To Plan</button>
+          </div>
+        `;
+        card.querySelector('.fac').textContent = sec.faculty || '';
+        const addBtn = card.querySelector('.btn');
+        if (!canAdd && courseStatus.reason) addBtn.title = courseStatus.reason;
+        addBtn.onclick = () => tryAddToPlan(sec, active);
+        cards.appendChild(card);
+      }
+    }
+  }
+  function migratePlanItemsIfPossible() {
+    let changed = false;
+    for (const p of (plans || [])) {
+      if (!Array.isArray(p.items) || p.items.length === 0) continue;
+      const newItems = [];
+      const seen = new Set();
+      for (const k of p.items) {
+        const sec = sectionByKey.get(k);
+        if (sec) {
+          const nk = keyOf(sec);
+          if (!seen.has(nk)) {
+            newItems.push(nk);
+            seen.add(nk);
+          }
+        } else {
+          // keep the original if we can't resolve it yet (maybe offers not loaded)
+          if (!seen.has(k)) {
+            newItems.push(k);
+            seen.add(k);
+          }
+        }
+      }
+      if (newItems.length !== p.items.length || newItems.some((v,i)=>v!==p.items[i])) {
+        p.items = newItems;
+        changed = true;
+      }
+    }
+    if (changed) {
+      // save locally (debounced by saveAll)
+      saveAll();
+    }
+  }
+  function tryAddToPlan(sec, active) {
+    const courseStatus = getCourseStatus(sec.course);
+    if (!courseStatus.eligible) {
+      alert(`Cannot add ${sec.course}.\n${courseStatus.reason || 'This course is not currently eligible.'}`);
+      return;
+    }
+
+    if (!active) { alert('Create and select a plan first.'); return; }
+    const existingItems = active.items.map(k => sectionByKey.get(k)).filter(Boolean);
+    if (existingItems.some(x => x.course === sec.course)) {
+      alert(`You cannot choose two sections of the same course (${sec.course}). Remove the other section first.`);
+      return;
+    }
+    const conflict = findConflictingWith(existingItems, sec);
+    if (conflict) {
+      alert(`Cannot add:\n${sec.course} Sec-${sec.section} (${sec.timing.label}) conflicts with\n${conflict.course} Sec-${conflict.section} (${conflict.timing.label}).`);
+      return;
+    }
+    const k = keyOf(sec); // <-- stable key
+    if (!active.items.includes(k)) active.items.push(k);
+    saveAll(); renderAll();
+  }
+
+  function renderSchedule() {
+    const sched = $('#schedule');
+    const mSched = $('#mSchedule');
+    const plan = plans.find(p => p.id === activePlanId);
+    const items = (plan?.items || []).map(k => sectionByKey.get(k)).filter(Boolean);
+
+    if (!isMobile) {
+      $('#dayTabs').style.display = 'none';
+      mSched.style.display = 'none';
+      sched.style.display = 'block';
+      sched.innerHTML = '';
+
+      sched.style.height = (HEADER_OFFSET + SLOTS.length * SLOT_HEIGHT) + 'px';
+
+      const slots = document.createElement('div');
+      slots.className = 'slots';
+      const slotsHeader = document.createElement('div');
+      slotsHeader.className = 'slots-header';
+      slots.appendChild(slotsHeader);
+      for (let i=0;i<SLOTS.length;i++) {
+        const row = document.createElement('div');
+        row.className = 'slot';
+        row.style.top = `${HEADER_OFFSET + i*SLOT_HEIGHT}px`;
+        row.style.height = `${SLOT_HEIGHT}px`;
+        row.textContent = SLOTS[i].label;
+        slots.appendChild(row);
+      }
+      sched.appendChild(slots);
+
+      const days = document.createElement('div');
+      days.className = 'days';
+      for (let d = 0; d < DAY_KEYS.length; d++) {
+        const col = document.createElement('div');
+        col.className = 'day-col';
+        const header = document.createElement('div');
+        header.className = 'day-header';
+        const dk = DAY_KEYS[d];
+        header.innerHTML = `<strong>${DAY_NAME_MAP[dk]}</strong>`;
+        col.appendChild(header);
+        for (let i=0;i<SLOTS.length;i++) {
+          const line = document.createElement('div');
+          line.style.position = 'absolute';
+          line.style.left = '0'; line.style.right = '0';
+          line.style.top = `${HEADER_OFFSET + i*SLOT_HEIGHT}px`;
+          line.style.borderTop = '1px dashed var(--grid-line)';
+          col.appendChild(line);
+        }
+        days.appendChild(col);
+      }
+      sched.appendChild(days);
+
+      for (const sec of items) {
+        const idx = slotIndexFor(sec.timing.start, sec.timing.end);
+        const top = (idx >= 0 ? HEADER_OFFSET + idx * SLOT_HEIGHT + 6 : HEADER_OFFSET + 6);
+        const height = (idx >= 0 ? SLOT_HEIGHT - 12 : SLOT_HEIGHT - 12);
+        for (const d of sec.timing.days) {
+          const dayIdx = DAY_MAP[d];
+          const block = document.createElement('div');
+          block.className = 'block';
+          block.style.top = `${top}px`;
+          block.style.height = `${height}px`;
+          block.innerHTML = `
+            <div><strong>${sec.course}</strong> Sec ${sec.section}</div>
+            <div class="small">${sec.timing.label} * ${sec.title || ''}</div>
+            <div class="small"></div>
+          `;
+          block.querySelector('.small:last-child').textContent = sec.faculty || '';
+          const dayCol = sched.querySelector('.days').children[dayIdx];
+          block.style.left = '6px';
+          block.style.right = '6px';
+          dayCol.appendChild(block);
+        }
+      }
+    } else {
+      $('#dayTabs').style.display = 'flex';
+      sched.style.display = 'none';
+      mSched.style.display = 'block';
+      mSched.innerHTML = '';
+
+      if (!DAY_KEYS.includes(activeMobileDay)) activeMobileDay = DAY_KEYS[0];
+
+      const tabs = $('#dayTabs');
+      tabs.innerHTML = '';
+      for (const dk of DAY_KEYS) {
+        const tab = document.createElement('button');
+        tab.className = 'day-tab' + (dk === activeMobileDay ? ' active' : '');
+        tab.textContent = DAY_NAME_MAP[dk];
+        tab.onclick = () => { activeMobileDay = dk; renderSchedule(); };
+        tabs.appendChild(tab);
+      }
+
+      for (let i=0; i<SLOTS.length; i++) {
+        const slot = SLOTS[i];
+        const row = document.createElement('div');
+        row.className = 'm-slot';
+        const label = document.createElement('div');
+        label.className = 'm-slot-label';
+        label.textContent = slot.label;
+        row.appendChild(label);
+
+        const inThisSlot = (items || []).filter(s =>
+          s.timing.days.includes(activeMobileDay) &&
+          s.timing.start === slot.start &&
+          s.timing.end === slot.end
+        );
+
+        if (inThisSlot.length === 0) {
+          const none = document.createElement('div');
+          none.className = 'small';
+          none.textContent = '-';
+          row.appendChild(none);
+        } else {
+          for (const sec of inThisSlot) {
+            const card = document.createElement('div');
+            card.className = 'm-block';
+            card.innerHTML = `
+              <div><strong>${sec.course}</strong> Sec ${sec.section}</div>
+              <div class="small">${sec.title || ''}</div>
+              <div class="small"></div>
+            `;
+            card.querySelector('.small:last-child').textContent = sec.faculty || '';
+            row.appendChild(card);
+          }
+        }
+
+        mSched.appendChild(row);
+      }
+    }
+  }
+
+  function renderPlanList() {
+    ensureDefaultPlans();
+    const plan = plans.find(p => p.id === activePlanId);
+    const items = (plan?.items || []).map(k => sectionByKey.get(k)).filter(Boolean);
+    const list = $('#planList');
+    list.innerHTML = '';
+    for (const sec of items) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `
+        <div class="wrap">
+          <strong>${sec.course}</strong> Sec ${sec.section}
+          <span class="tag">${sec.timing.label}</span>
+          <div class="small">${sec.title}</div>
+          <div class="small"></div>
+        </div>
+      `;
+      div.querySelector('.small:last-child').textContent = sec.faculty || '';
+      const r = document.createElement('div');
+      const btn = document.createElement('button');
+      btn.className = 'btn danger';
+      btn.textContent = 'Remove';
+      btn.onclick = () => {
+        const k = keyOf(sec);
+        plan.items = plan.items.filter(x => x !== k);
+        saveAll(); renderAll();
+      };
+      r.appendChild(btn);
+      div.appendChild(r);
+      list.appendChild(div);
+    }
+  }
+
+  function renderAll() {
+    updateAuthUI();
+    renderPlans();
+    renderCourseTableOrCards();
+    renderSchedule();
+    renderPlanList();
+  }
+
+  // ---------- Header compact behavior (mobile) ----------
+  const headerEl = $('#appHeader');
+  function updateHeaderCompact() {
+    if (!headerEl) return;
+    const shouldCompact = isMobile && window.scrollY > 20;
+    headerEl.classList.toggle('compact', shouldCompact);
+  }
+  window.addEventListener('scroll', updateHeaderCompact, { passive: true });
+
+  // ---------- Filters bottom sheet handlers (mobile) ----------
+  function closeFiltersSheet() {
+    const wrap = document.getElementById('filtersWrap');
+    const bd = document.getElementById('filtersBackdrop');
+    const btn = document.getElementById('btnToggleFilters');
+    if (!wrap || !bd) return;
+    wrap.classList.remove('open');
+    bd.classList.remove('show');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+
+  document.getElementById('btnToggleFilters').onclick = () => {
+    const wrap = document.getElementById('filtersWrap');
+    const bd = document.getElementById('filtersBackdrop');
+    const open = !wrap.classList.contains('open');
+    wrap.classList.toggle('open', open);
+    bd.classList.toggle('show', open);
+    document.getElementById('btnToggleFilters')
+      .setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  document.getElementById('filtersBackdrop').addEventListener('click', (e) => {
+    const { clientX, clientY } = e;
+    closeFiltersSheet();
+    requestAnimationFrame(() => {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (el && typeof el.click === 'function') el.click();
+    });
+  });
+
+  document.getElementById('btnCloseFilters').onclick = () => closeFiltersSheet();
+
+  document.getElementById('planPanel').addEventListener('pointerdown', () => closeFiltersSheet());
+
+  // ---------- Events ----------
+  $('#btnQuickAddPlan').onclick = () => {
+    const id = 'p_' + Math.random().toString(36).slice(2);
+    plans.push({ id, name: `Plan ${String.fromCharCode(65 + plans.length)}`, items: [] });
+    activePlanId = id;
+    saveAll(); renderAll();
+    showToast('New plan created.');
+  };
+
+  $('#btnAddPlan').onclick = () => {
+    const base = ($('#newPlanName').value || '').trim();
+    const name = base || `Plan ${String.fromCharCode(65 + plans.length)}`;
+    const id = 'p_' + Math.random().toString(36).slice(2);
+    plans.push({ id, name, items: [] });
+    activePlanId = id;
+    $('#newPlanName').value = '';
+    saveAll(); renderAll();
+  };
+
+  $('#btnRenamePlan').onclick = () => {
+    const p = plans.find(x => x.id === activePlanId);
+    if (!p) return showToast('No active plan.');
+    const name = prompt('New name:', p.name);
+    if (!name) return;
+    p.name = name;
+    saveAll(); renderAll();
+  };
+
+  $('#btnDuplicatePlan').onclick = () => {
+    const p = plans.find(x => x.id === activePlanId);
+    if (!p) return showToast('No active plan.');
+    const id = 'p_' + Math.random().toString(36).slice(2);
+    plans.push({ id, name: p.name + ' (copy)', items: [...p.items] });
+    activePlanId = id;
+    saveAll(); renderAll();
+  };
+
+  $('#btnDeletePlan').onclick = () => {
+    const idx = plans.findIndex(x => x.id === activePlanId);
+    if (idx < 0) return showToast('No active plan.');
+    const ok = confirm(`Delete ${plans[idx].name}?`);
+    if (!ok) return;
+    plans.splice(idx, 1);
+    activePlanId = plans[0]?.id || null;
+    ensureDefaultPlans();
+    saveAll(); renderAll();
+  };
+
+  $('#btnClearActive').onclick = () => {
+    const p = plans.find(x => x.id === activePlanId);
+    if (!p) return;
+    p.items = [];
+    saveAll(); renderAll();
+  };
+
+  $('#search').oninput = () => renderCourseTableOrCards();
+  $('#filterDay').onchange = () => renderCourseTableOrCards();
+  $('#filterStatus').onchange = () => renderCourseTableOrCards();
+  $('#filterAvail').onchange = () => renderCourseTableOrCards();
+
+  // Theme toggle (switch)
+  $('#themeToggleBtn').addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    setTheme(current !== 'light');
+  });
+
+  // Logout button
+  document.getElementById('btnIRASLogout').addEventListener('click', logoutIRAS);
+
+  // Also re-wire auth buttons on resize breakpoint changes
+  mql.addEventListener('change', e => {
+    isMobile = e.matches;
+    updateAuthUI();
+    updateHeaderCompact();
+    renderAll();
+  });
+  
+  // Helper: show image overlay (iOS PWA fallback)
+  function showImageOverlay(dataUrl) {
+    const ov = document.createElement('div');
+    ov.style.cssText = `
+      position:fixed; inset:0; background:rgba(0,0,0,.8); z-index:99999;
+      display:flex; align-items:center; justify-content:center; padding:16px;
+    `;
+    const inner = document.createElement('div');
+    inner.style.cssText = 'max-width:95vw; max-height:90vh; background:#fff; padding:8px; border-radius:8px; text-align:center;';
+    const p = document.createElement('div');
+    p.textContent = 'Long-press the image to Save. Tap outside to close.';
+    p.style.cssText = 'font: 14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0 0 8px;';
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.alt = 'Plan export';
+    img.style.cssText = 'max-width:100%; max-height:75vh; display:block; margin:0 auto;';
+    inner.appendChild(p);
+    inner.appendChild(img);
+    ov.appendChild(inner);
+    ov.addEventListener('click', (e) => { if (e.target === ov) document.body.removeChild(ov); });
+    document.body.appendChild(ov);
+  }
+  
+  async function exportCurrentPlanAsImage() {
+    try {
+      const plan = (plans || []).find(p => p.id === activePlanId);
+      if (!plan) { showToast && showToast('No active plan to export.'); return; }
+  
+      // Elements weâ€™ll need
+      const schedEl = document.getElementById('schedule');     // desktop grid
+      const planList = document.getElementById('planList');    // selected sections list
+      if (!schedEl || !planList) { showToast && showToast('Nothing to export yet.'); return; }
+  
+      // Read current theme and background so the export matches the app
+      const root = document.documentElement;
+      const theme = root.getAttribute('data-theme') || 'dark';
+      const bodyBg = getComputedStyle(document.body).backgroundColor;
+      const bg = bodyBg && bodyBg !== 'rgba(0, 0, 0, 0)' ? bodyBg : (theme === 'light' ? '#ffffff' : '#121821');
+  
+      // Build an off-screen export container
+      const wrap = document.createElement('div');
+      wrap.style.cssText = `
+        position:fixed; left:-99999px; top:0; width:900px;
+        background:${bg}; color:inherit; padding:16px;
+        font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      `;
+  
+      const title = document.createElement('h2');
+      title.textContent = plan.name || 'Plan';
+      title.style.cssText = 'margin:0 0 8px; font-size:20px;';
+      wrap.appendChild(title);
+  
+      // Force-render the DESKTOP schedule even on phones, without flashing the UI
+      const planPanel = document.getElementById('planPanel');
+      const prevVisibility = planPanel ? planPanel.style.visibility : '';
+      const wasMobile = isMobile;
+      let schedClone;
+      try {
+        if (planPanel) planPanel.style.visibility = 'hidden'; // avoid visible flicker
+        isMobile = false;
+        renderSchedule(); // renders desktop grid into #schedule
+        schedClone = schedEl.cloneNode(true);
+      } finally {
+        // Restore the UI to whatever the user had
+        isMobile = wasMobile;
+        renderSchedule();
+        if (planPanel) planPanel.style.visibility = prevVisibility;
+      }
+  
+      schedClone.style.width = '100%';
+      wrap.appendChild(schedClone);
+  
+      const listTitle = document.createElement('h3');
+      listTitle.textContent = 'Selected sections';
+      listTitle.style.cssText = 'margin:12px 0 6px; font-size:16px;';
+      wrap.appendChild(listTitle);
+  
+      const listClone = planList.cloneNode(true);
+      wrap.appendChild(listClone);
+  
+      // Footer
+      const footer = document.createElement('div');
+      footer.textContent = 'Course Planner, developed by IMZ';
+      footer.style.cssText = 'margin-top:12px; font-size:12px; opacity:.7; text-align:right;';
+      wrap.appendChild(footer);
+  
+      document.body.appendChild(wrap);
+  
+      // Render to canvas with current theme background
+      const scale = Math.min(2, window.devicePixelRatio || 1); // keep stable on iOS
+      const canvas = await html2canvas(wrap, {
+        backgroundColor: bg,
+        scale,
+        useCORS: true,
+        logging: false,
+        onclone: (doc) => {
+          // Ensure the cloned DOM keeps the same theme
+          doc.documentElement.setAttribute('data-theme', theme);
+          doc.documentElement.style.background = bg;
+          doc.body.style.background = bg;
+        }
+      });
+  
+      // Clean up temp node
+      document.body.removeChild(wrap);
+  
+      // Download (with iOS fallbacks)
+      const fileName = `${(plan.name || 'Plan').replace(/[\\/:*?"<>|]+/g,'_')} - IUB Course Planner.jpg`;
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+          const a = document.createElement('a');
+          if ('download' in a) {
+            a.href = dataUrl; a.download = fileName;
+            document.body.appendChild(a); a.click(); a.remove();
+          } else {
+            const w = window.open(dataUrl, '_blank');
+            if (!w || w.closed || typeof w.closed === 'undefined') showImageOverlay(dataUrl);
+          }
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        if ('download' in a) {
+          a.href = url; a.download = fileName;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } else {
+          URL.revokeObjectURL(url);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+          const w = window.open(dataUrl, '_blank');
+          if (!w || w.closed || typeof w.closed === 'undefined') showImageOverlay(dataUrl);
+        }
+      }, 'image/jpeg', 0.92);
+    } catch (err) {
+      console.warn('Export failed', err);
+      showToast && showToast('Export failed.');
+    }
+  }
+
+  
+  // Wire export button once for current mount
+  const btn = document.getElementById('btnExportPlan');
+  if (btn && !btn._wiredExport) {
+    btn._wiredExport = true;
+    btn.onclick = exportCurrentPlanAsImage;
+  }
+  
+  // ---------- Init ----------
+  (function initApp() {
+    applyThemeOnLoad();
+  
+    // Always have an in-memory default so UI renders immediately
+    ensureDefaultPlans();
+  
+    // If this page is a redirect callback, capture auth and clean URL
+    captureIRASAuthFromURL();
+  
+    // Show correct header buttons now
+    updateAuthUI();
+
+    // Preload prerequisite and grade status for list coloring and add validation.
+    loadVerificationFromIRAS().then(() => { renderAll(); }).catch(()=>{});
+  
+    // Kick off async loads without blocking/wedging the script
+    loadPlansFromServer().then(() => { renderAll(); }).catch(()=>{ /* keep UI */ });
+    loadSectionsFromBackend();   // local backup of courses (non-blocking)
+  
+    // First paint of the UI (empty/default), will update again when loads finish
+    renderAll();
+    updateHeaderCompact();
+  })();
+
+  return () => {
+    window.__IUB_PLANNER_BOOTED = false;
+  };
+}
+
