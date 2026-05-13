@@ -84,7 +84,7 @@ export default function CoursePlanner() {
               <button className="btn alt mobile-only" id="btnCloseFilters">Done</button>
               <div className="desk-auth-wrap">
                 <button id="btnIRASLoginDesk" className="btn iras" type="button" title="Sign in with IRAS" style={{ display: 'none' }}>IRAS Login</button>
-                <img className="nest-auth-logo nest-auth-logo-desktop" src={nestAuthLogo.src} alt="IUB NEST auth logo" />
+
               </div>
             </div>
 

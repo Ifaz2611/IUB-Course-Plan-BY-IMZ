@@ -1,17 +1,26 @@
+# Advanced robots.txt for IUB Course Planner
+
+# Group 1: Standard Search Engines
 User-agent: *
 Allow: /
+Disallow: /api/
+Disallow: /_next/
+Disallow: /static/
 
+# Group 2: Social Media Crawlers (Keep allowed for OpenGraph previews)
 User-agent: facebookexternalhit
-Allow: /
-
 User-agent: Facebot
-Allow: /
-
 User-agent: Twitterbot
-Allow: /
-
 User-agent: LinkedInBot
-Allow: /
-
 User-agent: Slackbot
 Allow: /
+
+# Group 3: AI Training Crawlers (Explicitly defined)
+User-agent: GPTBot
+User-agent: ChatGPT-User
+User-agent: CCBot
+Allow: /
+
+# Host & Sitemap
+# Replace 'yourdomain.com' with your actual domain when deployed
+Sitemap: https://yourdomain.com/sitemap.xml
