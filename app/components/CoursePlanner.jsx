@@ -21,7 +21,7 @@ export default function CoursePlanner() {
     <>
       <header id="appHeader">
         <div className="brand">
-          <h1>IUB Course Planner</h1>
+          <h1>Course Planner - IUB</h1>
           <div className="creator-line">
             <div className="sub">Made by IMZ </div>
             <img className="nest-auth-logo nest-auth-logo-mobile" src={nestAuthLogo.src} alt="IUB NEST auth logo" />

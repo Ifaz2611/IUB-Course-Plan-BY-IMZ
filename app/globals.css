@@ -1,22 +1,22 @@
 :root {
-  /* Dark theme (default) */
-  --bg-grad-top: #0b0f14;
-  --bg-grad-bottom: #0e131a;
+  /* ✨ Dark Theme - Refined */
+  --bg-grad-top: #0a0e14;
+  --bg-grad-bottom: #0d121a;
 
-  --panel: #121821;
-  --border: #1a2230;
+  --panel: #111827;        /* Slightly warmer, deeper surface */
+  --border: #1f2937;       /* Softer border for less visual noise */
 
-  --muted: #7a8596;
-  --text: #e7edf5;
+  --muted: #94a3b8;        /* Better readable muted text */
+  --text: #f1f5f9;         /* Crisp, accessible white */
 
-  --accent: #49a6e9;
-  --danger: #ef4444;
-  --ok: #10b981;
+  --accent: #60a5fa;       /* Vibrant but soft blue (WCAG AA compliant) */
+  --danger: #f87171;       /* Softer red, less harsh */
+  --ok: #34d399;           /* Fresh, accessible green */
 
-  --grid-line: #1f2937;
-  --chip: #273041;
-  --toast-bg: #1f2937;
-  --overlay: rgba(0,0,0,0.45);
+  --grid-line: #334155;    /* Subtle grid lines */
+  --chip: #1e293b;         /* Better contrast for chips/pills */
+  --toast-bg: #1e293b;
+  --overlay: rgba(2, 6, 23, 0.6);
 
   --font-base: 15px;
   --font-small: 13px;
@@ -25,24 +25,24 @@
   --radius: 10px;
 }
 
-/* Light theme overrides */
+/* ✨ Light Theme - Clean & Professional */
 html[data-theme="light"] {
-  --bg-grad-top: #f3f4f6;
-  --bg-grad-bottom: #eef2f7;
+  --bg-grad-top: #f8fafc;
+  --bg-grad-bottom: #f1f5f9;
 
   --panel: #ffffff;
-  --border: #e5e7eb;
+  --border: #e2e8f0;
 
-  --muted: #334155;
-  --text: #0f172a;
+  --muted: #64748b;        /* Softer, more readable muted */
+  --text: #0f172a;         /* Deep slate for excellent contrast */
 
-  --accent: #2563eb;
-  --danger: #b91c1c;
-  --ok: #047857;
+  --accent: #3b82f6;       /* Professional blue (Tailwind blue-500) */
+  --danger: #ef4444;       /* Standard accessible red */
+  --ok: #22c55e;           /* Vibrant accessible green */
 
   --grid-line: #cbd5e1;
-  --chip: #eef2f7;
-  --toast-bg: #f8fafc;
+  --chip: #f1f5f9;
+  --toast-bg: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -400,5 +400,3 @@ html[data-theme="light"] #toast { color:#0f172a; background:#f8fafc; border-colo
   - These are just placeholders to show the general idea of how new UI elements could look, and to avoid merge conflicts with the current styles.
   - They may be removed or significantly changed when we add the actual features.
 */
-
-

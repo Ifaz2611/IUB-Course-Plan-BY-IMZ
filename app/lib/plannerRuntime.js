@@ -30,7 +30,7 @@
 
   // IUB discrete time slots
   const SLOTS = [
-    { start: 8*60,        end: 9*60+30,  label: '8:00-09:30' },
+    { start: 8*60,        end: 9*60+30,  label: '8:00-9:30' },
     { start: 9*60+40,     end: 11*60+10, label: '9:40-11:10' },
     { start: 11*60+20,    end: 12*60+50, label: '11:20-12:50' },
     { start: 13*60,       end: 14*60+30, label: '1:00-2:30' },
