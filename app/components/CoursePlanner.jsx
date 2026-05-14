@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import html2canvas from 'html2canvas';
 import { initPlannerRuntime } from '../lib/plannerRuntime';
-import nestAuthLogo from '../../assets/icons/IMG_8338.PNG';
+
 
 export default function CoursePlanner() {
   const cleanupRef = useRef(null);
@@ -24,7 +24,6 @@ export default function CoursePlanner() {
           <h1>Course Planner - IUB</h1>
           <div className="creator-line">
             <div className="sub">Made by IMZ </div>
-            <img className="nest-auth-logo nest-auth-logo-mobile" src={nestAuthLogo.src} alt="IUB NEST auth logo" />
           </div>
         </div>
         <div className="spacer" />
@@ -134,7 +133,7 @@ export default function CoursePlanner() {
             </div>
 
             <div className="cards" id="courseCards" aria-live="polite" />
-            <div className="footnote">Course list can be shown from IRAS when you're signed in. Plans you make are saved locally (temporarily, if you sign out they're gone). I'm currently working to make them stick to your account (will be in future updates, soon).</div>
+            <div className="footnote">Course list can be shown from IRAS when you're signed in. Plans you make are saved locally (temporarily, if you sign out they're gone).</div>
           </div>
         </div>
 
