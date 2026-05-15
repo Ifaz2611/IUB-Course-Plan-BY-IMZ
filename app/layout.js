@@ -6,9 +6,9 @@ import iconMaskable from '../assets/icons/icon-maskable.png';
 import iconRound from '../assets/icons/icon-round.png';
 
 export const metadata = {
-  title: 'IUB Course Planner',
+  title: 'Course Planner By IMZ',
   description: 'Build conflict‑free course plans from IRAS course offers. Fast, mobile‑friendly, and option to export your plan as JPG.',
-  applicationName: 'IUB Course Planner',
+  applicationName: 'Course Planner By IMZ',
   robots: {
     index: true,
     follow: true
@@ -18,25 +18,18 @@ export const metadata = {
     canonical: '/'
   },
   openGraph: {
-    title: 'IUB Course Planner',
+    title: 'Course Planner By IMZ',
     description: 'Build conflict‑free course plans from IRAS course offers. Fast, mobile‑friendly, and option to export your plan as JPG.',
     url: '/',
-    siteName: 'IUB Course Planner',
+    siteName: 'Course Planner By IMZ',
     type: 'website',
-    images: [
-      {
-        url: '/social/og-image-1200x630.jpg',
-        width: 1200,
-        height: 630,
-        alt: 'IUB Course Planner preview image'
-      }
-    ]
+    images: []
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'IUB Course Planner',
+    title: 'Course Planner By IMZ',
     description: 'Build conflict‑free course plans from IRAS course offers. Fast, mobile‑friendly, and option to export your plan as JPG.',
-    images: ['/social/og-image-1200x630.jpg']
+    images: []
   },
   icons: {
     icon: [
