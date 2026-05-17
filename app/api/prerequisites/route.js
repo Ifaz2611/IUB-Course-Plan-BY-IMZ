@@ -46,8 +46,6 @@ export async function POST(request) {
   }
 }
 
-
-
 ///******************************************************************************************* */
 
 ///old version with CORS headers, kept for reference
