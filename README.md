@@ -75,3 +75,10 @@ Every semester, IUB students face the same nightmare: logging into iRAS, hunting
 
 **Thank you for using the IUB Course Planner!**  
 If it saves you even five minutes of stress during registration, it’s done its job.
+
+
+
+
+
+
+<!-- off due to iras api error -->
