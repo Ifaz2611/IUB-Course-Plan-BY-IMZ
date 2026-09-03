@@ -8,6 +8,19 @@
 
 ---
 
+## Installtion 
+
+```
+Copy the repo 
+
+step 1 : Git clone https://github.com/Ifaz2611/IUB-Course-Plan-BY-IMZ.git
+step 2 : cd IUB-Course-Plan-IMZ
+step 3 : npm i
+step 4 : npm run dev 
+``` 
+
+---
+
 ## The Motivation
 
 Every semester, IUB students face the same nightmare: logging into iRAS, hunting through cluttered course lists, manually verifying prerequisites, cross-checking timings on paper, and starting over after every clash. I built this planner to replace that frustration with a single, clean interface that does the hard work for you automatically validating what you can take and letting you experiment with as many conflict-free schedules as you like.
@@ -63,22 +76,3 @@ Every semester, IUB students face the same nightmare: logging into iRAS, hunting
 - Logging out completely removes your data from the device.
 
 ---
-
-## Upcoming Improvements
-
-- [ ] More robust plan restoration (surviving cache clears and incognito sessions)
-- [ ] Import / export plans as shareable files
-- [ ] Additional filter options and minor UX polish
-- [ ] Accessibility refinements
-
----
-
-**Thank you for using the IUB Course Planner!**  
-If it saves you even five minutes of stress during registration, it’s done its job.
-
-
-
-
-
-
-<!-- off due to iras api error -->
