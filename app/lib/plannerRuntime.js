@@ -1,6 +1,6 @@
 ﻿export function initPlannerRuntime(html2canvas) {
-    const IRAS_AUTH_LOGIN_URL = 'https://iras-auth.pages.dev/login';
-    const IRAS_OFFERS_URL = 'https://irastools.pages.dev/api/student/all-offer-courses';
+  const IRAS_AUTH_LOGIN_URL = 'https://iras-auth.pages.dev/login';
+  const IRAS_OFFERS_URL = 'https://irastools.pages.dev/api/student/all-offer-courses';
   const IRAS_PREREQ_PROXY_URL = '/api/prerequisites';
   const IRAS_REGISTERED_COURSES_PROXY_URL = '/api/registered-courses';
 
@@ -9,24 +9,14 @@
   window.__IUB_PLANNER_BOOTED = true;
 
   // ---------- Config ----------
-  const DAY_KEYS = ['A','S','M','T','W','R']; // No Friday
+  const DAY_KEYS = ['A','S','M','T','W','R'];
   const DAY_NAME_MAP = { A:'Sat', S:'Sun', M:'Mon', T:'Tue', W:'Wed', R:'Thu' };
   const DAY_MAP = Object.fromEntries(DAY_KEYS.map((k,i)=>[k,i]));
   const STORAGE_THEME = 'iub-theme';
   const PLANS_STORAGE_PREFIX = 'iub-plans';
-
-  // IRAS auth + endpoints
   const IRAS_AUTH_KEY = 'iras-auth-v1';
   const IRAS_OFFERS_CACHE_PREFIX = 'iras-offers-';
-  const IRAS_API_URL = IRAS_OFFERS_URL;
-
-  // Per-user course backup keys (kept for offers only)
-  function getIrasBackupKey(studentId) { return `iub-courses-backup-${studentId}`; }
-  function getIrasBackupTimeKey(studentId) { return `iub-courses-backup-time-${studentId}`; }
-  function getPlansStorageKey() {
-    const studentId = getIRASAuth()?.studentId;
-    return studentId ? `${PLANS_STORAGE_PREFIX}-${studentId}` : `${PLANS_STORAGE_PREFIX}-guest`;
-  }
+  const IRAS_OFFERS_URL_FETCH = IRAS_OFFERS_URL;
 
   // IUB discrete time slots
   const SLOTS = [
@@ -43,9 +33,9 @@
   const DAY_GROUPS = { ST: ['S','T'], MW: ['M','W'], AR: ['A','R'] };
 
   // ---------- State ----------
-  let staticSections = [];  // per-user backup (courses)
-  let irasSections = [];    // from IRAS API (courses)
-  let plans = [];           // [{id,name,items:[sectionKey]}]
+  let staticSections = [];
+  let irasSections = [];
+  let plans = [];
   let activePlanId = null;
   const sectionByKey = new Map();
   let activeMobileDay = 'S';
@@ -61,6 +51,7 @@
 
   // ---------- Utilities ----------
   const $ = sel => document.querySelector(sel);
+
   function setLoading(loading) {
     isLoadingCourses = !!loading;
     const sp = $('#loadingSpinner');
@@ -70,15 +61,16 @@
     if (headerBtn) headerBtn.disabled = loading;
     if (deskBtn) deskBtn.disabled = loading;
   }
+
   function minutesFromHHMM(s) {
     if (!s) return null;
-    let t = String(s).trim();
-    t = t.replace(/[^0-9]/g, '');
+    let t = String(s).trim().replace(/[^0-9]/g, '');
     if (t.length === 3) t = '0' + t;
     const m = t.match(/^(\d{2})(\d{2})$/);
     if (!m) return null;
     return parseInt(m[1],10)*60 + parseInt(m[2],10);
   }
+
   function parseDaysTime(str) {
     const src = (str || '').toString().trim();
     const m = src.match(/^([A-Z]+)\s*:?\s*(\d{3,4})\s*-\s*(\d{3,4})$/i);
@@ -90,22 +82,23 @@
     if (!dayCodes.length || start == null || end == null) return null;
     return { days: dayCodes, start, end, label: `${rawDays}: ${String(m[2]).padStart(4,'0')}-${String(m[3]).padStart(4,'0')}` };
   }
+
   function keyOf(sec) {
-    // Stable key: course|section|DAYS:start-end â€” ignores faculty, uses numeric times
-    // Example: CSE101|1|ST:580-670
     const days = (sec.timing?.days || []).join('');
     const start = sec.timing?.start ?? 0;
     const end = sec.timing?.end ?? 0;
     return `${sec.course}|${sec.section}|${days}:${start}-${end}`;
   }
+
   function legacyKeyOf(sec) {
-    // Your previous key (kept for compatibility)
     return `${sec.course}|${sec.section}|${sec.timing?.label || ''}|${(sec.faculty || '').trim()}`;
   }
+
   function updateThemeMeta(theme) {
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', theme === 'light' ? '#ffffff' : '#121821');
   }
+
   function applyThemeOnLoad() {
     const saved = localStorage.getItem(STORAGE_THEME);
     const theme = saved === 'light' ? 'light' : 'dark';
@@ -113,6 +106,7 @@
     updateThemeMeta(theme);
     syncThemeButton(theme);
   }
+
   function setTheme(isLight) {
     const theme = isLight ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
@@ -120,23 +114,27 @@
     updateThemeMeta(theme);
     syncThemeButton(theme);
   }
+
   function syncThemeButton(theme) {
     const btn = $('#themeToggleBtn');
     if (!btn) return;
     const isLight = theme === 'light';
     btn.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
   }
+
   function reindexAll() {
     sectionByKey.clear();
     const add = (sec) => {
       if (!sec) return;
-      sectionByKey.set(keyOf(sec), sec);       // new stable key
-      sectionByKey.set(legacyKeyOf(sec), sec); // legacy key still resolves
+      sectionByKey.set(keyOf(sec), sec);
+      sectionByKey.set(legacyKeyOf(sec), sec);
     };
     for (const sec of staticSections) add(sec);
     for (const sec of irasSections) add(sec);
   }
+
   function overlaps(a, b) { return a.start < b.end && b.start < a.end; }
+
   function findConflictingWith(items, candidate) {
     for (const s of items) {
       const daySet = new Set(s.timing.days);
@@ -145,26 +143,27 @@
     }
     return null;
   }
+
   function showToast(msg) {
-    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-    clearTimeout(showToast._timer); showToast._timer = setTimeout(()=>t.classList.remove('show'), 2800);
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(()=>t.classList.remove('show'), 2800);
   }
+
   function slotIndexFor(start, end) {
     for (let i=0;i<SLOTS.length;i++) if (SLOTS[i].start===start) return i;
     return -1;
   }
+
   function inDayGroup(sec, groupKey) {
     const group = DAY_GROUPS[groupKey]; if (!group) return true;
     return sec.timing.days.some(d => group.includes(d));
   }
 
-  function toCourseCode(v) {
-    return String(v || '').trim().toUpperCase();
-  }
-
-  function normalizeGrade(v) {
-    return String(v || '').trim().toUpperCase();
-  }
+  function toCourseCode(v) { return String(v || '').trim().toUpperCase(); }
+  function normalizeGrade(v) { return String(v || '').trim().toUpperCase(); }
 
   function clearVerificationState() {
     prereqLoadedForStudentId = null;
@@ -190,7 +189,6 @@
     }
 
     const index = new Map();
-
     grouped.forEach((entries, courseId) => {
       const failed = entries.filter((r) => !hasPassedPrereq(r));
       if (failed.length === 0) {
@@ -208,21 +206,16 @@
           : 'Prerequisite requirements are not satisfied.'
       });
     });
-
     prereqByCourse = index;
   }
 
   function buildCompletedCourseIndex(rows) {
     const withA = new Set();
-
     for (const row of (rows || [])) {
       const courseId = toCourseCode(row?.courseId);
       if (!courseId) continue;
-      if (normalizeGrade(row?.grade) === 'A') {
-        withA.add(courseId);
-      }
+      if (normalizeGrade(row?.grade) === 'A') withA.add(courseId);
     }
-
     completedWithA = withA;
   }
 
@@ -255,48 +248,36 @@
       return;
     }
 
-    if (
-      !force &&
-      prereqLoadedForStudentId === auth.studentId &&
-      gradeHistoryLoadedForStudentId === auth.studentId
-    ) {
-      return;
-    }
+    if (!force && prereqLoadedForStudentId === auth.studentId && gradeHistoryLoadedForStudentId === auth.studentId) return;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     const [prereqResult, gradeHistoryResult] = await Promise.allSettled([
       fetch(IRAS_PREREQ_PROXY_URL, {
         method: 'POST',
         cache: 'no-store',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          studentId: auth.studentId,
-          token: auth.token
-        })
+        signal: controller.signal,
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: auth.studentId, token: auth.token })
       }),
       fetch(IRAS_REGISTERED_COURSES_PROXY_URL, {
         method: 'POST',
         cache: 'no-store',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          studentId: auth.studentId,
-          token: auth.token
-        })
+        signal: controller.signal,
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: auth.studentId, token: auth.token })
       })
     ]);
 
+    clearTimeout(timeoutId);
     const errors = [];
 
     if (prereqResult.status === 'fulfilled') {
       const response = prereqResult.value;
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || String(payload?.message || '').toLowerCase() === 'invalid request') {
-        errors.push(new Error(payload?.message || ('Prerequisite API HTTP ' + response.status)));
+      if (!response.ok) {
+        errors.push(new Error(payload?.message || `Prerequisite API HTTP ${response.status}`));
       } else {
         buildPrereqIndex(Array.isArray(payload?.data) ? payload.data : []);
         prereqLoadedForStudentId = auth.studentId;
@@ -308,8 +289,8 @@
     if (gradeHistoryResult.status === 'fulfilled') {
       const response = gradeHistoryResult.value;
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || String(payload?.message || '').toLowerCase() === 'invalid request') {
-        errors.push(new Error(payload?.message || ('Registered-courses API HTTP ' + response.status)));
+      if (!response.ok) {
+        errors.push(new Error(payload?.message || `Registered-courses API HTTP ${response.status}`));
       } else {
         buildCompletedCourseIndex(Array.isArray(payload?.data) ? payload.data : []);
         gradeHistoryLoadedForStudentId = auth.studentId;
@@ -327,15 +308,19 @@
   function buildRedirectURI() {
     return window.location.origin + window.location.pathname;
   }
+
   function getIRASAuth() {
     try { return JSON.parse(localStorage.getItem(IRAS_AUTH_KEY) || 'null'); } catch { return null; }
   }
+
   function setIRASAuth(auth) {
     localStorage.setItem(IRAS_AUTH_KEY, JSON.stringify(auth));
   }
+
   function clearIRASAuth() {
     localStorage.removeItem(IRAS_AUTH_KEY);
   }
+
   function captureIRASAuthFromURL() {
     const url = new URL(window.location.href);
     const qp = url.searchParams;
@@ -363,6 +348,7 @@
     }
     return false;
   }
+
   function openIRASPopup() {
     const redirect = buildRedirectURI();
     const url = `${IRAS_AUTH_LOGIN_URL}?redirect_uri=${encodeURIComponent(redirect)}`;
@@ -373,7 +359,7 @@
     if (!authPopup) window.location.href = url;
   }
 
-  // ---------- Plans: local browser storage ----------
+  // ---------- Plans ----------
   function ensureDefaultPlans() {
     if (!Array.isArray(plans) || plans.length === 0) {
       const id = 'p_' + Math.random().toString(36).slice(2);
@@ -392,7 +378,6 @@
         plans = data.plans;
         activePlanId = data.activePlanId || data.plans[0]?.id || null;
       } else {
-        // No saved plans yet: initialize default in-memory; will save on first change.
         ensureDefaultPlans();
       }
     } catch (e) {
@@ -412,7 +397,6 @@
   }
 
   function saveAll() {
-    // Debounced local save
     clearTimeout(savePlansTimer);
     savePlansTimer = setTimeout(() => { savePlansToServer(); }, 500);
   }
@@ -423,41 +407,39 @@
     activePlanId = id;
   }
 
-  // ---------- Courses (IRAS) ----------
-  // UPDATED: make logout visually clear immediately (and wipe in-memory plans)
+  // ---------- Courses ----------
+  function getIrasBackupKey(studentId) { return `iub-courses-backup-${studentId}`; }
+  function getIrasBackupTimeKey(studentId) { return `iub-courses-backup-time-${studentId}`; }
+  function getPlansStorageKey() {
+    const studentId = getIRASAuth()?.studentId;
+    return studentId ? `${PLANS_STORAGE_PREFIX}-${studentId}` : `${PLANS_STORAGE_PREFIX}-guest`;
+  }
+
   function logoutIRAS() {
-    // Optional: flush any pending plan save (non-blocking)
     try { savePlansToServer(); } catch {}
     clearIRASAuth();
 
-    // Clear IRAS in-memory data and reindex (so the list reflects logged-out state)
     irasSections = [];
-    staticSections = [];           // <-- ADD THIS
+    staticSections = [];
     reindexAll();
     prereqLoadedForStudentId = null;
     prereqByCourse = new Map();
 
-    // Hide the chip right away and clear its text
     const info = document.getElementById('authInfo');
     const chip = document.getElementById('authChip');
     if (chip) chip.textContent = '';
     if (info) info.style.display = 'none';
 
-    // Reset login buttons to "IRAS Login" immediately
     wireAuthButtons();
 
-    // Clear the "Last refreshed" text
     const infoBox = document.getElementById('courseRefreshInfo');
     if (infoBox) infoBox.textContent = '';
 
-    // Reset plans to a clean default so another user's plans aren't visible
     resetPlansToDefault();
-
     renderAll();
     showToast('Logged out.');
   }
 
-  // Wire login/refresh buttons depending on auth and screen size
   function wireAuthButtons() {
     const auth = getIRASAuth();
     const headLogin = $('#btnIRASLoginHeader');
@@ -512,12 +494,11 @@
       try {
         const auth = event.data.payload;
         setIRASAuth(auth);
-        updateAuthUI();         // wires buttons (so IRAS Login becomes Course Refresh)
+        updateAuthUI();
         await loadVerificationFromIRAS(true).catch((e) => {
           console.warn('Verification load failed:', e);
           showToast('Could not validate prerequisite/grade status right now.');
         });
-        // Load plans first, then courses, then render
         await loadPlansFromServer().catch(()=>{});
         await loadSectionsFromIRAS().catch(()=>{});
         renderAll();
@@ -526,12 +507,11 @@
       }
     }
   });
-  // add once, near other event listeners
+
   window.addEventListener('beforeunload', () => {
     try { savePlansToServer(); } catch {}
   });
 
-  // ---------- Backend load (per-user backup only) ----------
   function loadBackupForCurrentUser() {
     const auth = getIRASAuth();
     staticSections = [];
@@ -552,7 +532,6 @@
     }
   }
 
-  // ---------- IRAS offers load ----------
   async function refreshCourses() {
     await loadVerificationFromIRAS(true).catch((e) => {
       console.warn('Verification load failed:', e);
@@ -571,11 +550,10 @@
   async function loadSectionsFromIRAS() {
     const auth = getIRASAuth();
     const errBox = document.getElementById('courseError');
-  
+
     setBackupBadge(false);
     if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
-  
-    // Not authenticated â†’ clear in-memory IRAS data and reindex
+
     if (!auth?.studentId || !auth?.token) {
       irasSections = [];
       reindexAll();
@@ -585,61 +563,55 @@
     }
 
     setLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
-      const response = await fetch(IRAS_OFFERS_URL, {
+      const response = await fetch(IRAS_OFFERS_URL_FETCH, {
         method: 'POST',
-        //mode: 'cors',
         cache: 'no-store',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ studentId: auth.studentId, token: auth.token }),
       });
-  
+
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const raw = await response.json();
-  
-      // Back-compat:
-      // - Old bridge: { success:true, data:{ eligibleOfferCourses:[...] } } (no "source")
-      // - New bridge: { ok:true, source:'iras'|'backup'|'none', data:{ eligibleOfferCourses:[...] } }
+
       const offersRaw = (raw && raw.data && Array.isArray(raw.data.eligibleOfferCourses))
         ? raw.data.eligibleOfferCourses
         : [];
       let source = raw && raw.source ? raw.source : '';
-  
+
       if (!source) {
         if (offersRaw.length > 0) source = 'iras';
         else if (raw?.success === true || raw?.ok === true) source = 'none';
       }
-  
+
       if (source === 'iras' && offersRaw.length > 0) {
-        // Fresh IRAS: map and persist local backup
         irasSections = offersRaw.map(mapIRASRow).filter(Boolean);
         localStorage.setItem(getIrasBackupKey(auth.studentId), JSON.stringify(irasSections));
         localStorage.setItem(getIrasBackupTimeKey(auth.studentId), new Date().toISOString());
         localStorage.setItem(IRAS_OFFERS_CACHE_PREFIX + auth.studentId, JSON.stringify(offersRaw));
-  
-        // Prefer IRAS list visibly; keep static mirror for unified indexing
         staticSections = [...irasSections];
         reindexAll();
         if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
         setBackupBadge(false);
         return;
       }
-  
+
       if (source === 'backup' && offersRaw.length > 0) {
-        // Server backup still gets mapped and mirrored locally for offline
         irasSections = offersRaw.map(mapIRASRow).filter(Boolean);
         localStorage.setItem(getIrasBackupKey(auth.studentId), JSON.stringify(irasSections));
         localStorage.setItem(getIrasBackupTimeKey(auth.studentId), new Date().toISOString());
         localStorage.setItem(IRAS_OFFERS_CACHE_PREFIX + auth.studentId, JSON.stringify(offersRaw));
-  
         staticSections = [...irasSections];
         reindexAll();
         if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
         setBackupBadge(true, 'Showing last saved backup');
         return;
       }
-  
-      // No data from bridge â†’ try per-user local backup
+
       const ls = localStorage.getItem(getIrasBackupKey(auth.studentId));
       if (ls) {
         try {
@@ -654,8 +626,7 @@
           }
         } catch {}
       }
-  
-      // Nothing anywhere â€” show friendly message
+
       irasSections = [];
       reindexAll();
       if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
@@ -667,9 +638,33 @@
       }
       setBackupBadge(false);
     } catch (e) {
+      if (e.name === 'AbortError') {
+        console.warn('IRAS fetch timeout');
+        // fallback to backup
+        const studentId = getIRASAuth()?.studentId || '';
+        const backup = studentId && localStorage.getItem(getIrasBackupKey(studentId));
+        if (backup) {
+          try {
+            irasSections = JSON.parse(backup) || [];
+            staticSections = [...irasSections];
+            reindexAll();
+            if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
+            setBackupBadge(true, 'Showing last saved backup');
+          } catch {
+            irasSections = [];
+            reindexAll();
+            if (errBox) { errBox.textContent = 'Could not load courses.'; errBox.style.display = 'block'; }
+            setBackupBadge(false);
+          }
+        } else {
+          irasSections = [];
+          reindexAll();
+          if (errBox) { errBox.textContent = 'Could not load courses.'; errBox.style.display = 'block'; }
+          setBackupBadge(false);
+        }
+        return;
+      }
       console.warn('IRAS offers fetch failed:', e);
-  
-      // Network/other error â†’ fallback to per-user local backup if available
       const studentId = getIRASAuth()?.studentId || '';
       const backup = studentId && localStorage.getItem(getIrasBackupKey(studentId));
       if (backup) {
@@ -682,23 +677,21 @@
         } catch {
           irasSections = [];
           reindexAll();
-          if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
           if (errBox) { errBox.textContent = 'Could not load courses.'; errBox.style.display = 'block'; }
           setBackupBadge(false);
         }
       } else {
         irasSections = [];
         reindexAll();
-        if (typeof migratePlanItemsIfPossible === 'function') migratePlanItemsIfPossible();
         if (errBox) { errBox.textContent = 'Could not load courses.'; errBox.style.display = 'block'; }
         setBackupBadge(false);
       }
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   }
 
-  // Map IRAS row -> internal section object
   function mapIRASRow(c) {
     if (!c) return null;
     const course = c.courseId || 'UNKNOWN';
@@ -815,7 +808,6 @@
         if (!canAdd && courseStatus.reason) btnAdd.title = courseStatus.reason;
         btnAdd.onclick = () => tryAddToPlan(sec, active);
         actions.appendChild(btnAdd);
-
         tbody.appendChild(tr);
       }
     } else {
@@ -852,6 +844,7 @@
       }
     }
   }
+
   function migratePlanItemsIfPossible() {
     let changed = false;
     for (const p of (plans || [])) {
@@ -867,7 +860,6 @@
             seen.add(nk);
           }
         } else {
-          // keep the original if we can't resolve it yet (maybe offers not loaded)
           if (!seen.has(k)) {
             newItems.push(k);
             seen.add(k);
@@ -879,11 +871,9 @@
         changed = true;
       }
     }
-    if (changed) {
-      // save locally (debounced by saveAll)
-      saveAll();
-    }
+    if (changed) saveAll();
   }
+
   function tryAddToPlan(sec, active) {
     const courseStatus = getCourseStatus(sec.course);
     if (!courseStatus.eligible) {
@@ -902,7 +892,7 @@
       alert(`Cannot add:\n${sec.course} Sec-${sec.section} (${sec.timing.label}) conflicts with\n${conflict.course} Sec-${conflict.section} (${conflict.timing.label}).`);
       return;
     }
-    const k = keyOf(sec); // <-- stable key
+    const k = keyOf(sec);
     if (!active.items.includes(k)) active.items.push(k);
     saveAll(); renderAll();
   }
@@ -1118,7 +1108,6 @@
   });
 
   document.getElementById('btnCloseFilters').onclick = () => closeFiltersSheet();
-
   document.getElementById('planPanel').addEventListener('pointerdown', () => closeFiltersSheet());
 
   // ---------- Events ----------
@@ -1181,24 +1170,21 @@
   $('#filterStatus').onchange = () => renderCourseTableOrCards();
   $('#filterAvail').onchange = () => renderCourseTableOrCards();
 
-  // Theme toggle (switch)
   $('#themeToggleBtn').addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme') || 'dark';
     setTheme(current !== 'light');
   });
 
-  // Logout button
   document.getElementById('btnIRASLogout').addEventListener('click', logoutIRAS);
 
-  // Also re-wire auth buttons on resize breakpoint changes
   mql.addEventListener('change', e => {
     isMobile = e.matches;
     updateAuthUI();
     updateHeaderCompact();
     renderAll();
   });
-  
-  // Helper: show image overlay (iOS PWA fallback)
+
+  // ---------- Export ----------
   function showImageOverlay(dataUrl) {
     const ov = document.createElement('div');
     ov.style.cssText = `
@@ -1220,26 +1206,24 @@
     ov.addEventListener('click', (e) => { if (e.target === ov) document.body.removeChild(ov); });
     document.body.appendChild(ov);
   }
-  
+
   async function exportCurrentPlanAsImage() {
     try {
       const plan = (plans || []).find(p => p.id === activePlanId);
-      if (!plan) { showToast && showToast('No active plan to export.'); return; }
+      if (!plan) { showToast('No active plan to export.'); return; }
 
       const schedEl = document.getElementById('schedule');
       const planList = document.getElementById('planList');
-      if (!schedEl || !planList) { showToast && showToast('Nothing to export yet.'); return; }
+      if (!schedEl || !planList) { showToast('Nothing to export yet.'); return; }
 
       const root = document.documentElement;
       const theme = root.getAttribute('data-theme') || 'dark';
       const isLight = theme === 'light';
-      // Use solid colors html2canvas can parse (no color-mix)
       const bg = isLight ? '#ffffff' : '#111111';
       const textColor = isLight ? '#1c1917' : '#fafafa';
       const borderColor = isLight ? '#e7e5e4' : '#2a2a2a';
       const panelBg = isLight ? '#ffffff' : '#1e1e1e';
 
-      // Build off-screen export container with solid colors only
       const wrap = document.createElement('div');
       wrap.style.cssText = `
         position:fixed; left:-99999px; top:0; width:920px;
@@ -1258,7 +1242,6 @@
       `;
       wrap.appendChild(header);
 
-      // Force desktop schedule render off-screen
       const planPanel = document.getElementById('planPanel');
       const prevVisibility = planPanel ? planPanel.style.visibility : '';
       const wasMobile = isMobile;
@@ -1267,7 +1250,6 @@
         if (planPanel) planPanel.style.visibility = 'hidden';
         isMobile = false;
         renderSchedule();
-        // Clone deeply but sanitize problematic styles afterwards
         schedClone = schedEl.cloneNode(true);
       } finally {
         isMobile = wasMobile;
@@ -1275,14 +1257,11 @@
         if (planPanel) planPanel.style.visibility = prevVisibility;
       }
 
-      // Sanitize clone for html2canvas: replace color-mix/backdrop-filter with solid values
       schedClone.style.cssText = `position:relative; border:1px solid ${borderColor}; border-radius:12px; overflow:hidden; background:${panelBg}; display:block; width:100%;`;
-      // Remove unsupported styles from descendants
       const sanitizeEl = (el) => {
         if (!el.style) return;
         el.style.backdropFilter = 'none';
         el.style.webkitBackdropFilter = 'none';
-        // Replace any color-mix leftover computed backgrounds with solid
         const bgVal = el.style.background;
         if (bgVal && bgVal.includes('color-mix')) el.style.background = panelBg;
       };
@@ -1295,7 +1274,6 @@
       listTitle.style.cssText = `margin:16px 0 8px; font-size:13px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7;`;
       wrap.appendChild(listTitle);
 
-      // Build a clean list section without relying on cloned nodes that may have color-mix
       const items = (plan.items || []).map(k => sectionByKey.get(k)).filter(Boolean);
       const listBox = document.createElement('div');
       listBox.style.cssText = `border:1px solid ${borderColor}; border-radius:12px; overflow:hidden; background:${panelBg};`;
@@ -1326,7 +1304,6 @@
       wrap.appendChild(footer);
 
       document.body.appendChild(wrap);
-      // Give browser a tick to layout
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
       const scale = Math.min(2, window.devicePixelRatio || 1);
@@ -1343,7 +1320,6 @@
             doc.documentElement.setAttribute('data-theme', theme);
             doc.documentElement.style.background = bg;
             doc.body.style.background = bg;
-            // Inject override style to neutralize any remaining color-mix in cloned doc
             const style = doc.createElement('style');
             style.textContent = `
               * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
@@ -1354,7 +1330,6 @@
         });
       } catch (canvasErr) {
         console.warn('html2canvas failed, trying fallback', canvasErr);
-        // Fallback: try with lower scale and ignoring errors
         canvas = await html2canvas(wrap, {
           backgroundColor: bg,
           scale: 1,
@@ -1387,7 +1362,7 @@
           a.href = url; a.download = fileName;
           document.body.appendChild(a); a.click(); a.remove();
           setTimeout(() => URL.revokeObjectURL(url), 1200);
-          showToast && showToast('Exported ' + fileName);
+          showToast('Exported ' + fileName);
         } else {
           URL.revokeObjectURL(url);
           const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
@@ -1403,10 +1378,8 @@
       }
     } catch (err) {
       console.warn('Export failed', err);
-      // Surface more info
       const msg = err && err.message ? err.message : String(err);
-      showToast && showToast('Export failed: ' + msg.slice(0, 80));
-      // Cleanup wrap if still in DOM
+      showToast('Export failed: ' + msg.slice(0, 80));
       document.querySelectorAll('div').forEach(el => {
         if (el.style && el.style.left === '-99999px') {
           try { el.remove(); } catch {}
@@ -1415,35 +1388,21 @@
     }
   }
 
-  
-  // Wire export button once for current mount
-  const btn = document.getElementById('btnExportPlan');
-  if (btn && !btn._wiredExport) {
-    btn._wiredExport = true;
-    btn.onclick = exportCurrentPlanAsImage;
+  const btnExport = document.getElementById('btnExportPlan');
+  if (btnExport && !btnExport._wiredExport) {
+    btnExport._wiredExport = true;
+    btnExport.onclick = exportCurrentPlanAsImage;
   }
-  
+
   // ---------- Init ----------
   (function initApp() {
     applyThemeOnLoad();
-  
-    // Always have an in-memory default so UI renders immediately
     ensureDefaultPlans();
-  
-    // If this page is a redirect callback, capture auth and clean URL
     captureIRASAuthFromURL();
-  
-    // Show correct header buttons now
     updateAuthUI();
-
-    // Preload prerequisite and grade status for list coloring and add validation.
     loadVerificationFromIRAS().then(() => { renderAll(); }).catch(()=>{});
-  
-    // Kick off async loads without blocking/wedging the script
-    loadPlansFromServer().then(() => { renderAll(); }).catch(()=>{ /* keep UI */ });
-    loadSectionsFromBackend();   // local backup of courses (non-blocking)
-  
-    // First paint of the UI (empty/default), will update again when loads finish
+    loadPlansFromServer().then(() => { renderAll(); }).catch(()=>{});
+    loadSectionsFromBackend();
     renderAll();
     updateHeaderCompact();
   })();
@@ -1452,4 +1411,3 @@
     window.__IUB_PLANNER_BOOTED = false;
   };
 }
-

@@ -5,6 +5,16 @@ import icon512 from '../assets/icons/icon-512.png';
 import iconMaskable from '../assets/icons/icon-maskable.png';
 import iconRound from '../assets/icons/icon-round.png';
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#121821' },
+  ],
+};
+
 export const metadata = {
   title: 'Course Planner By IMZ',
   description: 'Build conflict‑free course plans from IRAS course offers. Fast, mobile‑friendly, and option to export your plan as JPG.',
