@@ -8,3 +8,9 @@ yarn-error.log*
 pnpm-debug.log*
 .env*
 !.env.example
+
+
+
+#MD files
+
+agent.md

@@ -38,8 +38,8 @@
     { start: 16*60+20,    end: 17*60+50, label: '4:20-5:50' },
     { start: 18*60+30,    end: 21*60+30, label: '6:30-9:30' },
   ];
-  const SLOT_HEIGHT = 100;
-  const HEADER_OFFSET = 24;
+  const SLOT_HEIGHT = 92;
+  const HEADER_OFFSET = 26;
   const DAY_GROUPS = { ST: ['S','T'], MW: ['M','W'], AR: ['A','R'] };
 
   // ---------- State ----------
@@ -49,7 +49,7 @@
   let activePlanId = null;
   const sectionByKey = new Map();
   let activeMobileDay = 'S';
-  const mql = window.matchMedia('(max-width: 768px)');
+  const mql = window.matchMedia('(max-width: 900px)');
   let isMobile = mql.matches;
   let authPopup = null;
   let isLoadingCourses = false;
@@ -465,7 +465,7 @@
 
     if (!headLogin || !deskLogin) return;
 
-    const isDesk = window.matchMedia('(min-width: 769px)').matches;
+    const isDesk = window.matchMedia('(min-width: 901px)').matches;
 
     if (auth?.studentId) {
       headLogin.textContent = 'Course Refresh';
@@ -1225,88 +1225,150 @@
     try {
       const plan = (plans || []).find(p => p.id === activePlanId);
       if (!plan) { showToast && showToast('No active plan to export.'); return; }
-  
-      // Elements weâ€™ll need
-      const schedEl = document.getElementById('schedule');     // desktop grid
-      const planList = document.getElementById('planList');    // selected sections list
+
+      const schedEl = document.getElementById('schedule');
+      const planList = document.getElementById('planList');
       if (!schedEl || !planList) { showToast && showToast('Nothing to export yet.'); return; }
-  
-      // Read current theme and background so the export matches the app
+
       const root = document.documentElement;
       const theme = root.getAttribute('data-theme') || 'dark';
-      const bodyBg = getComputedStyle(document.body).backgroundColor;
-      const bg = bodyBg && bodyBg !== 'rgba(0, 0, 0, 0)' ? bodyBg : (theme === 'light' ? '#ffffff' : '#121821');
-  
-      // Build an off-screen export container
+      const isLight = theme === 'light';
+      // Use solid colors html2canvas can parse (no color-mix)
+      const bg = isLight ? '#ffffff' : '#111111';
+      const textColor = isLight ? '#1c1917' : '#fafafa';
+      const borderColor = isLight ? '#e7e5e4' : '#2a2a2a';
+      const panelBg = isLight ? '#ffffff' : '#1e1e1e';
+
+      // Build off-screen export container with solid colors only
       const wrap = document.createElement('div');
       wrap.style.cssText = `
-        position:fixed; left:-99999px; top:0; width:900px;
-        background:${bg}; color:inherit; padding:16px;
-        font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        position:fixed; left:-99999px; top:0; width:920px;
+        background:${bg}; color:${textColor}; padding:20px;
+        font:14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
       `;
-  
-      const title = document.createElement('h2');
-      title.textContent = plan.name || 'Plan';
-      title.style.cssText = 'margin:0 0 8px; font-size:20px;';
-      wrap.appendChild(title);
-  
-      // Force-render the DESKTOP schedule even on phones, without flashing the UI
+
+      const header = document.createElement('div');
+      header.style.cssText = `display:flex; align-items:center; gap:12px; margin-bottom:14px; padding-bottom:14px; border-bottom:2px solid ${borderColor};`;
+      header.innerHTML = `
+        <div style="width:36px;height:36px;border-radius:9px;background:#14b8a6;display:grid;place-items:center;color:#fff;font-weight:700;font-size:16px;">▦</div>
+        <div>
+          <div style="font-size:18px;font-weight:800;letter-spacing:-0.02em;line-height:1;">${plan.name || 'Plan'}</div>
+          <div style="font-size:12px;opacity:0.7;">IUB Course Planner • ${new Date().toLocaleDateString()}</div>
+        </div>
+      `;
+      wrap.appendChild(header);
+
+      // Force desktop schedule render off-screen
       const planPanel = document.getElementById('planPanel');
       const prevVisibility = planPanel ? planPanel.style.visibility : '';
       const wasMobile = isMobile;
       let schedClone;
       try {
-        if (planPanel) planPanel.style.visibility = 'hidden'; // avoid visible flicker
+        if (planPanel) planPanel.style.visibility = 'hidden';
         isMobile = false;
-        renderSchedule(); // renders desktop grid into #schedule
+        renderSchedule();
+        // Clone deeply but sanitize problematic styles afterwards
         schedClone = schedEl.cloneNode(true);
       } finally {
-        // Restore the UI to whatever the user had
         isMobile = wasMobile;
         renderSchedule();
         if (planPanel) planPanel.style.visibility = prevVisibility;
       }
-  
-      schedClone.style.width = '100%';
+
+      // Sanitize clone for html2canvas: replace color-mix/backdrop-filter with solid values
+      schedClone.style.cssText = `position:relative; border:1px solid ${borderColor}; border-radius:12px; overflow:hidden; background:${panelBg}; display:block; width:100%;`;
+      // Remove unsupported styles from descendants
+      const sanitizeEl = (el) => {
+        if (!el.style) return;
+        el.style.backdropFilter = 'none';
+        el.style.webkitBackdropFilter = 'none';
+        // Replace any color-mix leftover computed backgrounds with solid
+        const bgVal = el.style.background;
+        if (bgVal && bgVal.includes('color-mix')) el.style.background = panelBg;
+      };
+      schedClone.querySelectorAll('*').forEach(sanitizeEl);
+
       wrap.appendChild(schedClone);
-  
-      const listTitle = document.createElement('h3');
-      listTitle.textContent = 'Selected sections';
-      listTitle.style.cssText = 'margin:12px 0 6px; font-size:16px;';
+
+      const listTitle = document.createElement('div');
+      listTitle.textContent = 'Selected Sections';
+      listTitle.style.cssText = `margin:16px 0 8px; font-size:13px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7;`;
       wrap.appendChild(listTitle);
-  
-      const listClone = planList.cloneNode(true);
-      wrap.appendChild(listClone);
-  
-      // Footer
+
+      // Build a clean list section without relying on cloned nodes that may have color-mix
+      const items = (plan.items || []).map(k => sectionByKey.get(k)).filter(Boolean);
+      const listBox = document.createElement('div');
+      listBox.style.cssText = `border:1px solid ${borderColor}; border-radius:12px; overflow:hidden; background:${panelBg};`;
+      if (items.length === 0) {
+        const empty = document.createElement('div');
+        empty.textContent = 'No sections added yet.';
+        empty.style.cssText = `padding:16px; opacity:0.6; text-align:center;`;
+        listBox.appendChild(empty);
+      } else {
+        items.forEach((sec, idx) => {
+          const row = document.createElement('div');
+          row.style.cssText = `display:flex; justify-content:space-between; align-items:center; padding:10px 14px; ${idx !== 0 ? `border-top:1px solid ${borderColor};` : ''}`;
+          row.innerHTML = `
+            <div>
+              <div style="font-weight:700;">${sec.course} <span style="font-weight:400; opacity:0.7;">Sec ${sec.section}</span> <span style="font-family:ui-monospace,monospace; font-size:11px; background:${isLight ? '#ccfbf1' : '#134e4a'}; color:${isLight ? '#134e4a' : '#ccfbf1'}; padding:2px 6px; border-radius:6px; border:1px solid ${isLight ? '#99f6e4' : '#0f766e'};">${sec.timing.label}</span></div>
+              <div style="font-size:12px; opacity:0.7;">${sec.title || ''} • ${sec.faculty || ''}</div>
+            </div>
+            <div style="font-family:ui-monospace,monospace; font-size:12px; font-weight:700; color:${sec.enrolled >= sec.capacity ? '#f43f5e' : '#0d9488'};">${sec.enrolled}/${sec.capacity}</div>
+          `;
+          listBox.appendChild(row);
+        });
+      }
+      wrap.appendChild(listBox);
+
       const footer = document.createElement('div');
-      footer.textContent = 'Course Planner, developed by IMZ';
-      footer.style.cssText = 'margin-top:12px; font-size:12px; opacity:.7; text-align:right;';
+      footer.textContent = 'Created by Ifaz Md Zahin • Independent University, Bangladesh (IUB)';
+      footer.style.cssText = 'margin-top:14px; font-size:11px; opacity:0.65; text-align:center; letter-spacing:0.04em; font-weight:600;';
       wrap.appendChild(footer);
-  
+
       document.body.appendChild(wrap);
-  
-      // Render to canvas with current theme background
-      const scale = Math.min(2, window.devicePixelRatio || 1); // keep stable on iOS
-      const canvas = await html2canvas(wrap, {
-        backgroundColor: bg,
-        scale,
-        useCORS: true,
-        logging: false,
-        onclone: (doc) => {
-          // Ensure the cloned DOM keeps the same theme
-          doc.documentElement.setAttribute('data-theme', theme);
-          doc.documentElement.style.background = bg;
-          doc.body.style.background = bg;
-        }
-      });
-  
-      // Clean up temp node
+      // Give browser a tick to layout
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      const scale = Math.min(2, window.devicePixelRatio || 1);
+      let canvas;
+      try {
+        canvas = await html2canvas(wrap, {
+          backgroundColor: bg,
+          scale,
+          useCORS: true,
+          logging: false,
+          allowTaint: false,
+          foreignObjectRendering: false,
+          onclone: (doc) => {
+            doc.documentElement.setAttribute('data-theme', theme);
+            doc.documentElement.style.background = bg;
+            doc.body.style.background = bg;
+            // Inject override style to neutralize any remaining color-mix in cloned doc
+            const style = doc.createElement('style');
+            style.textContent = `
+              * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+              .block, .m-block { background: ${isLight ? '#14b8a6' : '#14b8a6'} !important; color: #fff !important; }
+            `;
+            doc.head.appendChild(style);
+          }
+        });
+      } catch (canvasErr) {
+        console.warn('html2canvas failed, trying fallback', canvasErr);
+        // Fallback: try with lower scale and ignoring errors
+        canvas = await html2canvas(wrap, {
+          backgroundColor: bg,
+          scale: 1,
+          useCORS: false,
+          logging: false,
+        });
+      }
+
       document.body.removeChild(wrap);
-  
-      // Download (with iOS fallbacks)
+
+      if (!canvas) throw new Error('Canvas creation returned null');
+
       const fileName = `${(plan.name || 'Plan').replace(/[\\/:*?"<>|]+/g,'_')} - IUB Course Planner.jpg`;
-      canvas.toBlob(async (blob) => {
+      const tryDownload = (blob) => {
         if (!blob) {
           const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
           const a = document.createElement('a');
@@ -1324,17 +1386,32 @@
         if ('download' in a) {
           a.href = url; a.download = fileName;
           document.body.appendChild(a); a.click(); a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          setTimeout(() => URL.revokeObjectURL(url), 1200);
+          showToast && showToast('Exported ' + fileName);
         } else {
           URL.revokeObjectURL(url);
           const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
           const w = window.open(dataUrl, '_blank');
           if (!w || w.closed || typeof w.closed === 'undefined') showImageOverlay(dataUrl);
         }
-      }, 'image/jpeg', 0.92);
+      };
+
+      if (canvas.toBlob) {
+        canvas.toBlob(tryDownload, 'image/jpeg', 0.92);
+      } else {
+        tryDownload(null);
+      }
     } catch (err) {
       console.warn('Export failed', err);
-      showToast && showToast('Export failed.');
+      // Surface more info
+      const msg = err && err.message ? err.message : String(err);
+      showToast && showToast('Export failed: ' + msg.slice(0, 80));
+      // Cleanup wrap if still in DOM
+      document.querySelectorAll('div').forEach(el => {
+        if (el.style && el.style.left === '-99999px') {
+          try { el.remove(); } catch {}
+        }
+      });
     }
   }
 
