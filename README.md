@@ -2,8 +2,8 @@
 
 > A fast, intuitive timetable builder for Independent University, Bangladesh — without the chaos.
 
-[![Live App](https://img.shields.io/badge/Live-App-brightgreen)](https://iub-course-plan-by-imz.vercel.app/)
-[![PWA Ready](https://img.shields.io/badge/PWA-Installable-blue)](https://iub-course-plan-by-imz.vercel.app/)
+[![Live App](https://img.shields.io/badge/Live-App-brightgreen)](/)
+[![PWA Ready](https://img.shields.io/badge/PWA-Installable-blue)](/)
 [![License](https://img.shields.io/badge/license-Apache%202-blue)](LICENSE)
 
 ---
@@ -32,7 +32,7 @@ Every semester, IUB students face the same nightmare: logging into iRAS, hunting
 
 ## Getting Started
 
-1. Open the **[Live App](https://iub-course-plan-by-imz.vercel.app/)** in your browser (or launch the installed PWA).
+1. Open the **[Live App](/)** in your browser (or launch the installed PWA). <<< NOT REDAY FOR PRODUCATION >>>
 2. Click **“iRAS Login”** and sign in with your university credentials.
 3. Browse the fetched course list — use the search bar and filters to zero in on what you need.
 4. For any eligible section, click **“Add To Plan”** — the planner will automatically reject overlaps or ineligible courses.
